@@ -1,0 +1,36 @@
+version: '3.8'
+
+services:
+  whatsapp-manager:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: whatsapp-manager
+    restart: unless-stopped
+    ports:
+      - "5000:5000"           # API & HTTP Proxy
+      - "9001-9100:9001-9100" # TCP Proxy ports (WebSocket)
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock  # Docker socket for managing containers
+      - ./whatsapp-data:/opt/whatsapp-data          # Shared data directory
+      - ./logs:/app/logs                            # Logs
+    environment:
+      - AppSettings__Supabase__Url=${SUPABASE_URL}
+      - AppSettings__Supabase__Key=${SUPABASE_KEY}
+      - AppSettings__Host__HostName=${HOST_NAME:-host-1}
+      - AppSettings__Host__IpAddress=${HOST_IP:-0.0.0.0}
+      - AppSettings__Host__ExternalIp=${EXTERNAL_IP:-}
+      - AppSettings__Docker__DataBasePath=/opt/whatsapp-data
+      - TZ=Asia/Jerusalem
+    networks:
+      - whatsapp-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  whatsapp-network:
+    driver: bridge
