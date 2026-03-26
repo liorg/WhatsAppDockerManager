@@ -3,7 +3,7 @@ using WhatsAppDockerManager.Configuration;
 using WhatsAppDockerManager.Services;
 using WhatsAppDockerManager.Services.Background;
 using WhatsAppDockerManager.Services.Proxy;
-
+using Yarp.ReverseProxy.Configuration;
 var builder = WebApplication.CreateBuilder(args);
 
 // Configure Serilog

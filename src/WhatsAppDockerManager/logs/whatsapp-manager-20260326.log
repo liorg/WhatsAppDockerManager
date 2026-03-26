@@ -1,0 +1,42 @@
+2026-03-26 16:47:34.460 +02:00 [INF] Connecting to Docker at unix:///var/run/docker.sock
+2026-03-26 16:47:34.523 +02:00 [INF] Initializing Container Manager...
+2026-03-26 16:47:34.611 +02:00 [ERR] Error in GetOrCreateHostAsync for host-1
+System.Net.Http.HttpRequestException: Name or service not known (your_project.supabase.co:443)
+ ---> System.Net.Sockets.SocketException (0xFFFDFFFF): Name or service not known
+   at System.Net.Sockets.Socket.AwaitableSocketAsyncEventArgs.ThrowException(SocketError error, CancellationToken cancellationToken)
+   at System.Net.Sockets.Socket.AwaitableSocketAsyncEventArgs.System.Threading.Tasks.Sources.IValueTaskSource.GetResult(Int16 token)
+   at System.Net.Sockets.Socket.<ConnectAsync>g__WaitForConnectWithCancellation|285_0(AwaitableSocketAsyncEventArgs saea, ValueTask connectTask, CancellationToken cancellationToken)
+   at System.Net.Http.HttpConnectionPool.ConnectToTcpHostAsync(String host, Int32 port, HttpRequestMessage initialRequest, Boolean async, CancellationToken cancellationToken)
+   --- End of inner exception stack trace ---
+   at System.Net.Http.HttpConnectionPool.ConnectToTcpHostAsync(String host, Int32 port, HttpRequestMessage initialRequest, Boolean async, CancellationToken cancellationToken)
+   at System.Net.Http.HttpConnectionPool.ConnectAsync(HttpRequestMessage request, Boolean async, CancellationToken cancellationToken)
+   at System.Net.Http.HttpConnectionPool.CreateHttp11ConnectionAsync(HttpRequestMessage request, Boolean async, CancellationToken cancellationToken)
+   at System.Net.Http.HttpConnectionPool.AddHttp11ConnectionAsync(QueueItem queueItem)
+   at System.Threading.Tasks.TaskCompletionSourceWithCancellation`1.WaitWithCancellationAsync(CancellationToken cancellationToken)
+   at System.Net.Http.HttpConnectionPool.SendWithVersionDetectionAndRetryAsync(HttpRequestMessage request, Boolean async, Boolean doRequestAuth, CancellationToken cancellationToken)
+   at System.Net.Http.RedirectHandler.SendAsync(HttpRequestMessage request, Boolean async, CancellationToken cancellationToken)
+   at System.Net.Http.HttpClient.<SendAsync>g__Core|83_0(HttpRequestMessage request, HttpCompletionOption completionOption, CancellationTokenSource cts, Boolean disposeCts, CancellationTokenSource pendingRequestsCts, CancellationToken originalCancellationToken)
+   at Supabase.Postgrest.Helpers.MakeRequest(ClientOptions clientOptions, HttpMethod method, String url, JsonSerializerSettings serializerSettings, Object data, Dictionary`2 headers, CancellationToken cancellationToken)
+   at Supabase.Postgrest.Helpers.MakeRequest[T](ClientOptions clientOptions, HttpMethod method, String url, JsonSerializerSettings serializerSettings, Object data, Dictionary`2 headers, Func`1 getHeaders, CancellationToken cancellationToken)
+   at WhatsAppDockerManager.Services.SupabaseService.GetOrCreateHostAsync(String hostName, String ipAddress, String externalIp, Int32 portRangeStart, Int32 portRangeEnd, Int32 maxContainers) in /home/lior/projects/github/WhatsAppDockerManager/src/WhatsAppDockerManager/Services/SupabaseService.cs:line 49
+2026-03-26 16:48:05.555 +02:00 [INF] Connecting to Docker at unix:///var/run/docker.sock
+2026-03-26 16:48:05.613 +02:00 [INF] Initializing Container Manager...
+2026-03-26 16:48:05.701 +02:00 [ERR] Error in GetOrCreateHostAsync for host-1
+System.Net.Http.HttpRequestException: Name or service not known (your_project.supabase.co:443)
+ ---> System.Net.Sockets.SocketException (0xFFFDFFFF): Name or service not known
+   at System.Net.Sockets.Socket.AwaitableSocketAsyncEventArgs.ThrowException(SocketError error, CancellationToken cancellationToken)
+   at System.Net.Sockets.Socket.AwaitableSocketAsyncEventArgs.System.Threading.Tasks.Sources.IValueTaskSource.GetResult(Int16 token)
+   at System.Net.Sockets.Socket.<ConnectAsync>g__WaitForConnectWithCancellation|285_0(AwaitableSocketAsyncEventArgs saea, ValueTask connectTask, CancellationToken cancellationToken)
+   at System.Net.Http.HttpConnectionPool.ConnectToTcpHostAsync(String host, Int32 port, HttpRequestMessage initialRequest, Boolean async, CancellationToken cancellationToken)
+   --- End of inner exception stack trace ---
+   at System.Net.Http.HttpConnectionPool.ConnectToTcpHostAsync(String host, Int32 port, HttpRequestMessage initialRequest, Boolean async, CancellationToken cancellationToken)
+   at System.Net.Http.HttpConnectionPool.ConnectAsync(HttpRequestMessage request, Boolean async, CancellationToken cancellationToken)
+   at System.Net.Http.HttpConnectionPool.CreateHttp11ConnectionAsync(HttpRequestMessage request, Boolean async, CancellationToken cancellationToken)
+   at System.Net.Http.HttpConnectionPool.AddHttp11ConnectionAsync(QueueItem queueItem)
+   at System.Threading.Tasks.TaskCompletionSourceWithCancellation`1.WaitWithCancellationAsync(CancellationToken cancellationToken)
+   at System.Net.Http.HttpConnectionPool.SendWithVersionDetectionAndRetryAsync(HttpRequestMessage request, Boolean async, Boolean doRequestAuth, CancellationToken cancellationToken)
+   at System.Net.Http.RedirectHandler.SendAsync(HttpRequestMessage request, Boolean async, CancellationToken cancellationToken)
+   at System.Net.Http.HttpClient.<SendAsync>g__Core|83_0(HttpRequestMessage request, HttpCompletionOption completionOption, CancellationTokenSource cts, Boolean disposeCts, CancellationTokenSource pendingRequestsCts, CancellationToken originalCancellationToken)
+   at Supabase.Postgrest.Helpers.MakeRequest(ClientOptions clientOptions, HttpMethod method, String url, JsonSerializerSettings serializerSettings, Object data, Dictionary`2 headers, CancellationToken cancellationToken)
+   at Supabase.Postgrest.Helpers.MakeRequest[T](ClientOptions clientOptions, HttpMethod method, String url, JsonSerializerSettings serializerSettings, Object data, Dictionary`2 headers, Func`1 getHeaders, CancellationToken cancellationToken)
+   at WhatsAppDockerManager.Services.SupabaseService.GetOrCreateHostAsync(String hostName, String ipAddress, String externalIp, Int32 portRangeStart, Int32 portRangeEnd, Int32 maxContainers) in /home/lior/projects/github/WhatsAppDockerManager/src/WhatsAppDockerManager/Services/SupabaseService.cs:line 49

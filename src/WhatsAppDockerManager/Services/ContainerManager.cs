@@ -1,6 +1,7 @@
 using WhatsAppDockerManager.Configuration;
 using WhatsAppDockerManager.Models;
-
+using DbHost = WhatsAppDockerManager.Models.Host;
+using Supabase;
 namespace WhatsAppDockerManager.Services;
 
 public interface IContainerManager
@@ -23,7 +24,7 @@ public class ContainerManager : IContainerManager
     private readonly HostSettings _hostSettings;
     private readonly DockerSettings _dockerSettings;
     
-    private Host? _currentHost;
+    private DbHost? _currentHost;
     private bool _initialized;
     private readonly SemaphoreSlim _initLock = new(1, 1);
     private readonly SemaphoreSlim _syncLock = new(1, 1);

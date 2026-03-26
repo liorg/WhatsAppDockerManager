@@ -1,13 +1,13 @@
-using Supabase;
+
 using WhatsAppDockerManager.Configuration;
 using WhatsAppDockerManager.Models;
 using System.Text.Json;
-
+using DbHost = WhatsAppDockerManager.Models.Host;
 namespace WhatsAppDockerManager.Services;
-
+using Supabase;
 public interface ISupabaseService
 {
-    Task<Host?> GetOrCreateHostAsync(string hostName, string ipAddress, string? externalIp, int portRangeStart, int portRangeEnd, int maxContainers);
+    Task<DbHost?> GetOrCreateHostAsync(string hostName, string ipAddress, string? externalIp, int portRangeStart, int portRangeEnd, int maxContainers);
     Task UpdateHostHeartbeatAsync(Guid hostId);
     Task<List<Phone>> GetPhonesForHostAsync(Guid hostId);
     Task<List<Phone>> GetOrphanedPhonesAsync();
@@ -15,8 +15,8 @@ public interface ISupabaseService
     Task UpdatePhoneDockerStatusAsync(Guid phoneId, string status, string? containerId = null, string? containerName = null, int? apiPort = null, int? wsPort = null, string? dockerUrl = null, string? errorMessage = null);
     Task AssignPhoneToHostAsync(Guid phoneId, Guid hostId);
     Task LogContainerEventAsync(Guid? phoneId, Guid? hostId, string eventType, object? eventData = null);
-    Task<List<Host>> GetActiveHostsAsync();
-    Task<Host?> GetHostByIdAsync(Guid hostId);
+    Task<List<DbHost>> GetActiveHostsAsync();
+    Task<DbHost?> GetHostByIdAsync(Guid hostId);
     Task SetHostStatusAsync(Guid hostId, string status);
     Task<int> GetNextAvailablePortAsync(Guid hostId, int rangeStart, int rangeEnd);
 }
@@ -41,12 +41,12 @@ public class SupabaseService : ISupabaseService
         _client = new Client(settings.Url, settings.Key, options);
     }
 
-    public async Task<Host?> GetOrCreateHostAsync(string hostName, string ipAddress, string? externalIp, int portRangeStart, int portRangeEnd, int maxContainers)
+    public async Task<DbHost?> GetOrCreateHostAsync(string hostName, string ipAddress, string? externalIp, int portRangeStart, int portRangeEnd, int maxContainers)
     {
         try
         {
             // Try to find existing host
-            var response = await _client.From<Host>()
+            var response = await _client.From<DbHost>()
                 .Where(h => h.HostName == hostName)
                 .Get();
 
@@ -63,13 +63,13 @@ public class SupabaseService : ISupabaseService
                 existingHost.PortRangeEnd = portRangeEnd;
                 existingHost.MaxContainers = maxContainers;
 
-                await _client.From<Host>().Update(existingHost);
+                await _client.From<DbHost>().Update(existingHost);
                 _logger.LogInformation("Updated existing host: {HostName}", hostName);
                 return existingHost;
             }
 
             // Create new host
-            var newHost = new Host
+            var newHost = new DbHost
             {
                 Id = Guid.NewGuid(),
                 HostName = hostName,
@@ -84,7 +84,7 @@ public class SupabaseService : ISupabaseService
                 UpdatedAt = DateTime.UtcNow
             };
 
-            var insertResponse = await _client.From<Host>().Insert(newHost);
+            var insertResponse = await _client.From<DbHost>().Insert(newHost);
             _logger.LogInformation("Created new host: {HostName}", hostName);
             return insertResponse.Models.FirstOrDefault();
         }
@@ -103,7 +103,7 @@ public class SupabaseService : ISupabaseService
             if (host != null)
             {
                 host.LastHeartbeat = DateTime.UtcNow;
-                await _client.From<Host>().Update(host);
+                await _client.From<DbHost>().Update(host);
             }
         }
         catch (Exception ex)
@@ -240,11 +240,11 @@ public class SupabaseService : ISupabaseService
         }
     }
 
-    public async Task<List<Host>> GetActiveHostsAsync()
+    public async Task<List<DbHost>> GetActiveHostsAsync()
     {
         try
         {
-            var response = await _client.From<Host>()
+            var response = await _client.From<DbHost>()
                 .Where(h => h.Status == HostStatus.Active)
                 .Get();
 
@@ -253,15 +253,15 @@ public class SupabaseService : ISupabaseService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error getting active hosts");
-            return new List<Host>();
+            return new List<DbHost>();
         }
     }
 
-    public async Task<Host?> GetHostByIdAsync(Guid hostId)
+    public async Task<DbHost?> GetHostByIdAsync(Guid hostId)
     {
         try
         {
-            var response = await _client.From<Host>()
+            var response = await _client.From<DbHost>()
                 .Where(h => h.Id == hostId)
                 .Get();
 
@@ -282,7 +282,7 @@ public class SupabaseService : ISupabaseService
             if (host != null)
             {
                 host.Status = status;
-                await _client.From<Host>().Update(host);
+                await _client.From<DbHost>().Update(host);
             }
         }
         catch (Exception ex)

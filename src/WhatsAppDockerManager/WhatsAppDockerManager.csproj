@@ -10,10 +10,12 @@
   <ItemGroup>
     <!-- Docker API -->
     <PackageReference Include="Docker.DotNet" Version="3.125.15" />
+    <PackageReference Include="Supabase" Version="1.1.1" />
+    <PackageReference Include="supabase-csharp" Version="0.16.2" />
+    <PackageReference Include="Supabase.Postgrest" Version="4.1.0" />
+    <PackageReference Include="Swashbuckle.AspNetCore" Version="10.1.7" />
     
     <!-- Supabase -->
-    <PackageReference Include="supabase-csharp" Version="1.1.1" />
-    <PackageReference Include="Postgrest" Version="4.0.3" />
     
     <!-- HTTP Proxy (YARP) -->
     <PackageReference Include="Yarp.ReverseProxy" Version="2.1.0" />

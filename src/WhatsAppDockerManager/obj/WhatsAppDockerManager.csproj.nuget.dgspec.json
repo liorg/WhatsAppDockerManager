@@ -1,23 +1,20 @@
 {
   "format": 1,
   "restore": {
-    "C:\\SOURCE\\github\\WhatsAppDockerManager\\WhatsAppDockerManager\\src\\WhatsAppDockerManager\\WhatsAppDockerManager.csproj": {}
+    "/home/lior/projects/github/WhatsAppDockerManager/src/WhatsAppDockerManager/WhatsAppDockerManager.csproj": {}
   },
   "projects": {
-    "C:\\SOURCE\\github\\WhatsAppDockerManager\\WhatsAppDockerManager\\src\\WhatsAppDockerManager\\WhatsAppDockerManager.csproj": {
+    "/home/lior/projects/github/WhatsAppDockerManager/src/WhatsAppDockerManager/WhatsAppDockerManager.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "C:\\SOURCE\\github\\WhatsAppDockerManager\\WhatsAppDockerManager\\src\\WhatsAppDockerManager\\WhatsAppDockerManager.csproj",
+        "projectUniqueName": "/home/lior/projects/github/WhatsAppDockerManager/src/WhatsAppDockerManager/WhatsAppDockerManager.csproj",
         "projectName": "WhatsAppDockerManager",
-        "projectPath": "C:\\SOURCE\\github\\WhatsAppDockerManager\\WhatsAppDockerManager\\src\\WhatsAppDockerManager\\WhatsAppDockerManager.csproj",
-        "packagesPath": "C:\\Users\\noooo\\.nuget\\packages\\",
-        "outputPath": "C:\\SOURCE\\github\\WhatsAppDockerManager\\WhatsAppDockerManager\\src\\WhatsAppDockerManager\\obj\\",
+        "projectPath": "/home/lior/projects/github/WhatsAppDockerManager/src/WhatsAppDockerManager/WhatsAppDockerManager.csproj",
+        "packagesPath": "/home/lior/.nuget/packages/",
+        "outputPath": "/home/lior/projects/github/WhatsAppDockerManager/src/WhatsAppDockerManager/obj/",
         "projectStyle": "PackageReference",
-        "fallbackFolders": [
-          "C:\\Program Files\\dotnet\\sdk\\NuGetFallbackFolder"
-        ],
         "configFilePaths": [
-          "C:\\Users\\noooo\\AppData\\Roaming\\NuGet\\NuGet.Config"
+          "/home/lior/.nuget/NuGet/NuGet.Config"
         ],
         "originalTargetFrameworks": [
           "net8.0"
@@ -35,13 +32,7 @@
           "warnAsError": [
             "NU1605"
           ]
-        },
-        "restoreAuditProperties": {
-          "enableAudit": "true",
-          "auditLevel": "low",
-          "auditMode": "direct"
-        },
-        "SdkAnalysisLevel": "9.0.200"
+        }
       },
       "frameworks": {
         "net8.0": {
@@ -55,10 +46,6 @@
               "target": "Package",
               "version": "[8.0.0, )"
             },
-            "Postgrest": {
-              "target": "Package",
-              "version": "[4.0.3, )"
-            },
             "Serilog.AspNetCore": {
               "target": "Package",
               "version": "[8.0.0, )"
@@ -71,6 +58,18 @@
               "target": "Package",
               "version": "[5.0.0, )"
             },
+            "Supabase": {
+              "target": "Package",
+              "version": "[1.1.1, )"
+            },
+            "Supabase.Postgrest": {
+              "target": "Package",
+              "version": "[4.1.0, )"
+            },
+            "Swashbuckle.AspNetCore": {
+              "target": "Package",
+              "version": "[10.1.7, )"
+            },
             "System.IO.Pipelines": {
               "target": "Package",
               "version": "[8.0.0, )"
@@ -81,7 +80,7 @@
             },
             "supabase-csharp": {
               "target": "Package",
-              "version": "[1.1.1, )"
+              "version": "[0.16.2, )"
             }
           },
           "imports": [
@@ -103,7 +102,7 @@
               "privateAssets": "all"
             }
           },
-          "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\9.0.201/PortableRuntimeIdentifierGraph.json"
+          "runtimeIdentifierGraphPath": "/usr/lib/dotnet/sdk/8.0.125/PortableRuntimeIdentifierGraph.json"
         }
       }
     }
