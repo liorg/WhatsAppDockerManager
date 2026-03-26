@@ -28,17 +28,19 @@ public class SupabaseService : ISupabaseService
 
     public SupabaseService(IConfiguration configuration, ILogger<SupabaseService> logger)
     {
+       var url = Environment.GetEnvironmentVariable("SUPABASE_URL") 
+    ?? throw new InvalidOperationException("SUPABASE_URL not set");
+var key = Environment.GetEnvironmentVariable("SUPABASE_KEY")
+    ?? throw new InvalidOperationException("SUPABASE_KEY not set");
         _logger = logger;
         
-        var settings = configuration.GetSection("AppSettings:Supabase").Get<SupabaseSettings>()
-            ?? throw new InvalidOperationException("Supabase settings not configured");
-
+        
         var options = new SupabaseOptions
         {
             AutoConnectRealtime = false
         };
 
-        _client = new Client(settings.Url, settings.Key, options);
+        _client = new Client(url, key, options);
     }
 
     public async Task<DbHost?> GetOrCreateHostAsync(string hostName, string ipAddress, string? externalIp, int portRangeStart, int portRangeEnd, int maxContainers)

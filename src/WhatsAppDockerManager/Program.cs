@@ -4,6 +4,7 @@ using WhatsAppDockerManager.Services;
 using WhatsAppDockerManager.Services.Background;
 using WhatsAppDockerManager.Services.Proxy;
 using Yarp.ReverseProxy.Configuration;
+DotNetEnv.Env.Load();
 var builder = WebApplication.CreateBuilder(args);
 
 // Configure Serilog
@@ -71,7 +72,7 @@ var containerManager = app.Services.GetRequiredService<IContainerManager>();
 await containerManager.InitializeAsync();
 
 // Configure pipeline
-if (app.Environment.IsDevelopment())
+//if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
     app.UseSwaggerUI();

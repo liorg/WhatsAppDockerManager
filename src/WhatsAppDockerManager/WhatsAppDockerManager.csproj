@@ -10,6 +10,7 @@
   <ItemGroup>
     <!-- Docker API -->
     <PackageReference Include="Docker.DotNet" Version="3.125.15" />
+    <PackageReference Include="DotNetEnv" Version="3.1.1" />
     <PackageReference Include="Supabase" Version="1.1.1" />
     <PackageReference Include="supabase-csharp" Version="0.16.2" />
     <PackageReference Include="Supabase.Postgrest" Version="4.1.0" />
