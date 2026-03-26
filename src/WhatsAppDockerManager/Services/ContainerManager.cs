@@ -142,6 +142,9 @@ public class ContainerManager : IContainerManager
                 dockerUrl: dockerUrl
             );
 
+            // Register webhook in container to receive events back
+            await RegisterWebhookInContainerAsync(apiPort, phone.Id);
+
             await _supabaseService.LogContainerEventAsync(
                 phone.Id,
                 _currentHost.Id,
@@ -163,6 +166,53 @@ public class ContainerManager : IContainerManager
             );
             
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Register webhook in the container so it sends events back to this manager
+    /// </summary>
+    private async Task RegisterWebhookInContainerAsync(int apiPort, Guid phoneId)
+    {
+        try
+        {
+            // Wait for container to be ready
+            await Task.Delay(3000);
+
+            using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+            
+            // The manager's webhook endpoint
+            var managerWebhook = $"http://host.docker.internal:5000/api/webhook/container-event/{phoneId}";
+            
+            // If running on Linux without host.docker.internal, use the host IP
+            if (!OperatingSystem.IsWindows() && !OperatingSystem.IsMacOS())
+            {
+                managerWebhook = $"http://{_hostSettings.IpAddress}:5000/api/webhook/container-event/{phoneId}";
+            }
+
+            var payload = new
+            {
+                url = managerWebhook,
+                secret = "manager-secret"
+            };
+
+            var response = await httpClient.PostAsJsonAsync(
+                $"http://localhost:{apiPort}/webhooks/register",
+                payload
+            );
+
+            if (response.IsSuccessStatusCode)
+            {
+                _logger.LogInformation("Webhook registered in container for phone {PhoneId}", phoneId);
+            }
+            else
+            {
+                _logger.LogWarning("Failed to register webhook in container: {Status}", response.StatusCode);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not register webhook in container (container might not be ready yet)");
         }
     }
 

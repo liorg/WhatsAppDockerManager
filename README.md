@@ -11,6 +11,116 @@
 - ✅ **High Availability** - כשרת נופל, שרת אחר לוקח את הטלפונים
 - ✅ **Health Monitoring** - בדיקות בריאות ואתחול אוטומטי
 - ✅ **Supabase Integration** - סנכרון עם מסד נתונים
+- ✅ **Webhook Integration** - קבלת events מ-containers
+
+## ארכיטקטורה
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                           Frontend (React)                          │
+│                                                                     │
+│   GET /api/routes  →  קבל רשימת טלפונים פעילים                     │
+│   GET /wa/972501234567/qrcode/image  →  הצג QR                     │
+│   POST /wa/972501234567/send/text  →  שלח הודעה                    │
+└────────────────────────────────┬────────────────────────────────────┘
+                                 │
+                                 ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                    WhatsApp Docker Manager (.NET)                   │
+│                                                                     │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────────┐  │
+│  │  YARP Proxy  │  │  Container   │  │  Background Services     │  │
+│  │              │  │  Manager     │  │  - Heartbeat (30s)       │  │
+│  │ /wa/{phone}/ │  │              │  │  - Health Check (60s)    │  │
+│  │     ↓        │  │  - Create    │  │  - Sync (5min)           │  │
+│  │ Container    │  │  - Start     │  │  - Route Sync            │  │
+│  │              │  │  - Stop      │  │                          │  │
+│  └──────────────┘  └──────────────┘  └──────────────────────────┘  │
+│                                                                     │
+│  ┌──────────────────────────────────────────────────────────────┐  │
+│  │                     Webhook Receiver                          │  │
+│  │  POST /api/webhook/container-event/{phoneId}                  │  │
+│  │  ← קבלת events מה-containers (messages, auth, disconnect)    │  │
+│  └──────────────────────────────────────────────────────────────┘  │
+└────────────────────────────────┬────────────────────────────────────┘
+                                 │
+          ┌──────────────────────┼──────────────────────┐
+          │                      │                      │
+          ▼                      ▼                      ▼
+┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐
+│   Container 1   │  │   Container 2   │  │   Container 3   │
+│   :8001/:9001   │  │   :8002/:9002   │  │   :8003/:9003   │
+│                 │  │                 │  │                 │
+│  WhatsApp API   │  │  WhatsApp API   │  │  WhatsApp API   │
+│  (FastAPI)      │  │  (FastAPI)      │  │  (FastAPI)      │
+└─────────────────┘  └─────────────────┘  └─────────────────┘
+```
+
+## Frontend Integration
+
+### קבלת רשימת טלפונים פעילים
+
+```javascript
+// GET /api/routes
+const response = await fetch('/api/routes');
+const { phones } = await response.json();
+
+// Response:
+{
+  "count": 2,
+  "phones": [
+    {
+      "phoneId": "uuid-1",
+      "phoneNumber": "+972501234567",
+      "label": "Office",
+      "status": "running",
+      "routes": {
+        "baseUrl": "/wa/972501234567",
+        "byId": "/wa/id/uuid-1",
+        "endpoints": {
+          "status": "/wa/972501234567/status",
+          "qrcode": "/wa/972501234567/qrcode",
+          "qrcodeImage": "/wa/972501234567/qrcode/image",
+          "sendText": "/wa/972501234567/send/text",
+          "sendButtons": "/wa/972501234567/send/buttons",
+          "sendList": "/wa/972501234567/send/list",
+          "contacts": "/wa/972501234567/contacts",
+          "authDashboard": "/wa/972501234567/auth/dashboard",
+          "health": "/wa/972501234567/health"
+        }
+      }
+    }
+  ]
+}
+```
+
+### שליחת הודעה
+
+```javascript
+// POST /wa/972501234567/send/text
+await fetch('/wa/972501234567/send/text', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    jid: '972509876543@s.whatsapp.net',
+    text: 'שלום!'
+  })
+});
+```
+
+### הצגת QR Code
+
+```html
+<img src="/wa/972501234567/qrcode/image" alt="Scan QR" />
+```
+
+### בדיקת סטטוס חיבור
+
+```javascript
+// GET /wa/972501234567/status
+const status = await fetch('/wa/972501234567/status').then(r => r.json());
+// { "connected": true, "phone": "972501234567", ... }
+```
 
 ## דרישות מקדימות
 

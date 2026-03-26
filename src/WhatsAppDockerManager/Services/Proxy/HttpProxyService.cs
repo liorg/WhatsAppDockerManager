@@ -6,13 +6,29 @@ using WhatsAppDockerManager.Models;
 namespace WhatsAppDockerManager.Services.Proxy;
 
 /// <summary>
-/// Dynamic route provider for YARP that routes requests to the correct container
+/// Dynamic route provider for YARP that routes requests to the correct container.
+/// 
+/// Routes available for Frontend:
+/// - /wa/{phoneNumber}/status          → Container /status
+/// - /wa/{phoneNumber}/qrcode          → Container /qrcode
+/// - /wa/{phoneNumber}/qrcode/image    → Container /qrcode/image
+/// - /wa/{phoneNumber}/send/text       → Container /send/text
+/// - /wa/{phoneNumber}/send/buttons    → Container /send/buttons
+/// - /wa/{phoneNumber}/send/list       → Container /send/list
+/// - /wa/{phoneNumber}/contacts        → Container /contacts
+/// - /wa/{phoneNumber}/auth/dashboard  → Container /auth/dashboard
+/// - /wa/{phoneNumber}/health          → Container /health
+/// - /wa/{phoneNumber}/**              → Container /** (catch-all)
+/// 
+/// Also supports routing by phone ID:
+/// - /wa/id/{phoneId}/**               → Container /**
 /// </summary>
 public class DynamicProxyConfigProvider : IProxyConfigProvider, IDisposable
 {
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<DynamicProxyConfigProvider> _logger;
     private readonly ConcurrentDictionary<string, PhoneRouteInfo> _phoneRoutes = new();
+    private readonly ConcurrentDictionary<Guid, PhoneRouteInfo> _phoneRoutesById = new();
     private CancellationTokenSource _changeToken = new();
     private volatile IProxyConfig _config;
 
@@ -36,9 +52,8 @@ public class DynamicProxyConfigProvider : IProxyConfigProvider, IDisposable
         {
             var phoneKey = phone.Number.Replace("+", "");
             var clusterId = $"cluster-{phoneKey}";
-            var routeId = $"route-{phoneKey}";
 
-            // Create cluster (destination)
+            // Create cluster (destination) - points to the container's FastAPI
             clusters.Add(new ClusterConfig
             {
                 ClusterId = clusterId,
@@ -58,49 +73,52 @@ public class DynamicProxyConfigProvider : IProxyConfigProvider, IDisposable
                 }
             });
 
-            // Create route - match by phone number in path or header
+            // Main route by phone number: /wa/{phoneNumber}/**
             routes.Add(new RouteConfig
             {
-                RouteId = routeId,
+                RouteId = $"route-{phoneKey}",
                 ClusterId = clusterId,
                 Match = new RouteMatch
                 {
-                    Path = $"/api/phone/{phoneKey}/{{**catch-all}}"
+                    Path = $"/wa/{phoneKey}/{{**catch-all}}"
                 },
                 Transforms = new List<IReadOnlyDictionary<string, string>>
                 {
                     new Dictionary<string, string>
                     {
-                        { "PathRemovePrefix", $"/api/phone/{phoneKey}" }
+                        { "PathRemovePrefix", $"/wa/{phoneKey}" }
                     }
                 }
             });
 
-            // Also add route by phone ID
+            // Route by phone ID: /wa/id/{phoneId}/**
             routes.Add(new RouteConfig
             {
-                RouteId = $"{routeId}-by-id",
+                RouteId = $"route-id-{phone.Id}",
                 ClusterId = clusterId,
                 Match = new RouteMatch
                 {
-                    Path = $"/api/id/{phone.Id}/{{**catch-all}}"
+                    Path = $"/wa/id/{phone.Id}/{{**catch-all}}"
                 },
                 Transforms = new List<IReadOnlyDictionary<string, string>>
                 {
                     new Dictionary<string, string>
                     {
-                        { "PathRemovePrefix", $"/api/id/{phone.Id}" }
+                        { "PathRemovePrefix", $"/wa/id/{phone.Id}" }
                     }
                 }
             });
 
-            _phoneRoutes[phoneKey] = new PhoneRouteInfo
+            var routeInfo = new PhoneRouteInfo
             {
                 PhoneId = phone.Id,
                 PhoneNumber = phone.Number,
                 ApiPort = phone.ApiPort!.Value,
                 WsPort = phone.WsPort ?? 0
             };
+
+            _phoneRoutes[phoneKey] = routeInfo;
+            _phoneRoutesById[phone.Id] = routeInfo;
         }
 
         // Create new config and signal change
@@ -116,6 +134,13 @@ public class DynamicProxyConfigProvider : IProxyConfigProvider, IDisposable
     {
         return _phoneRoutes.TryGetValue(phoneKey, out var info) ? info : null;
     }
+
+    public PhoneRouteInfo? GetRouteInfoById(Guid phoneId)
+    {
+        return _phoneRoutesById.TryGetValue(phoneId, out var info) ? info : null;
+    }
+
+    public IEnumerable<PhoneRouteInfo> GetAllRoutes() => _phoneRoutes.Values;
 
     public void Dispose()
     {
