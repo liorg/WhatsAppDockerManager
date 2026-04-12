@@ -274,3 +274,29 @@ System.ObjectDisposedException: The CancellationTokenSource has been disposed.
 2026-03-26 18:02:46.466 +02:00 [INF] Updated proxy routes: 0 phones
 2026-03-26 18:03:16.711 +02:00 [INF] Updated proxy routes: 0 phones
 2026-03-26 18:03:47.048 +02:00 [INF] Updated proxy routes: 0 phones
+2026-03-26 18:04:17.359 +02:00 [INF] Updated proxy routes: 0 phones
+2026-03-26 18:04:47.596 +02:00 [INF] Updated proxy routes: 0 phones
+2026-03-26 18:05:17.878 +02:00 [INF] Updated proxy routes: 0 phones
+2026-03-26 18:05:48.189 +02:00 [INF] Updated proxy routes: 0 phones
+2026-03-26 18:06:18.416 +02:00 [INF] Updated proxy routes: 0 phones
+2026-03-26 18:06:48.658 +02:00 [INF] Updated proxy routes: 0 phones
+2026-03-26 18:07:18.915 +02:00 [INF] Updated proxy routes: 0 phones
+2026-03-26 18:07:43.601 +02:00 [INF] Syncing containers with database...
+2026-03-26 18:07:44.207 +02:00 [INF] Container sync completed. Managing 0 phones
+2026-03-26 18:07:49.224 +02:00 [INF] Updated proxy routes: 0 phones
+2026-03-26 18:08:19.535 +02:00 [INF] Updated proxy routes: 0 phones
+2026-03-26 18:08:49.842 +02:00 [INF] Updated proxy routes: 0 phones
+2026-03-26 18:09:20.072 +02:00 [INF] Updated proxy routes: 0 phones
+2026-03-26 18:09:50.303 +02:00 [INF] Updated proxy routes: 0 phones
+2026-03-26 18:10:03.257 +02:00 [INF] Application is shutting down...
+2026-03-26 18:10:03.264 +02:00 [INF] TCP Proxy Service stopping...
+2026-03-26 18:10:03.270 +02:00 [FTL] Application terminated unexpectedly
+System.ObjectDisposedException: The CancellationTokenSource has been disposed.
+   at System.Threading.CancellationTokenSource.Cancel()
+   at WhatsAppDockerManager.Services.Proxy.DynamicProxyConfigProvider.Dispose() in /home/lior/projects/github/WhatsAppDockerManager/src/WhatsAppDockerManager/Services/Proxy/HttpProxyService.cs:line 147
+   at Microsoft.Extensions.DependencyInjection.ServiceLookup.ServiceProviderEngineScope.DisposeAsync()
+--- End of stack trace from previous location ---
+   at Microsoft.Extensions.Hosting.Internal.Host.<DisposeAsync>g__DisposeAsync|21_0(Object o)
+   at Microsoft.Extensions.Hosting.Internal.Host.DisposeAsync()
+   at Microsoft.Extensions.Hosting.HostingAbstractionsHostExtensions.RunAsync(IHost host, CancellationToken token)
+   at Program.<Main>$(String[] args) in /home/lior/projects/github/WhatsAppDockerManager/src/WhatsAppDockerManager/Program.cs:line 96

@@ -8,7 +8,7 @@ namespace WhatsAppDockerManager.Services;
 public interface IDockerService
 {
     Task<bool> PullImageAsync(string imageName);
-    Task<string?> CreateAndStartContainerAsync(Phone phone, int apiPort, int wsPort);
+    Task<string?> CreateAndStartContainerAsync(Phone phone);
     Task<bool> StopContainerAsync(string containerId);
     Task<bool> RemoveContainerAsync(string containerId);
     Task<ContainerInspectResponse?> InspectContainerAsync(string containerId);
@@ -23,26 +23,24 @@ public class DockerService : IDockerService, IDisposable
     private readonly ILogger<DockerService> _logger;
     private readonly DockerSettings _dockerSettings;
     private readonly HostSettings _hostSettings;
+    private readonly IConfiguration _configuration;
 
     public DockerService(IConfiguration configuration, ILogger<DockerService> logger)
     {
-        _logger = logger;
+        _logger         = logger;
+        _configuration  = configuration;
         _dockerSettings = configuration.GetSection("AppSettings:Docker").Get<DockerSettings>() ?? new();
-        _hostSettings = configuration.GetSection("AppSettings:Host").Get<HostSettings>() ?? new();
+        _hostSettings   = configuration.GetSection("AppSettings:Host").Get<HostSettings>() ?? new();
 
-        // Auto-detect Docker socket based on OS
         var dockerUri = GetDockerUri();
         _logger.LogInformation("Connecting to Docker at {Uri}", dockerUri);
-        
         _client = new DockerClientConfiguration(new Uri(dockerUri)).CreateClient();
     }
 
     private static string GetDockerUri()
     {
         if (OperatingSystem.IsWindows())
-        {
             return "npipe://./pipe/docker_engine";
-        }
         return "unix:///var/run/docker.sock";
     }
 
@@ -55,25 +53,17 @@ public class DockerService : IDockerService, IDisposable
             var progress = new Progress<JSONMessage>(message =>
             {
                 if (!string.IsNullOrEmpty(message.Status))
-                {
                     _logger.LogDebug("Pull progress: {Status} {Progress}", message.Status, message.ProgressMessage);
-                }
             });
 
-            // Parse image name
             var parts = imageName.Split(':');
-            var name = parts[0];
-            var tag = parts.Length > 1 ? parts[1] : "latest";
+            var name  = parts[0];
+            var tag   = parts.Length > 1 ? parts[1] : "latest";
 
             await _client.Images.CreateImageAsync(
-                new ImagesCreateParameters
-                {
-                    FromImage = name,
-                    Tag = tag
-                },
+                new ImagesCreateParameters { FromImage = name, Tag = tag },
                 null,
-                progress
-            );
+                progress);
 
             _logger.LogInformation("Successfully pulled image: {ImageName}", imageName);
             return true;
@@ -85,21 +75,29 @@ public class DockerService : IDockerService, IDisposable
         }
     }
 
-    public async Task<string?> CreateAndStartContainerAsync(Phone phone, int apiPort, int wsPort)
+    public async Task<string?> CreateAndStartContainerAsync(Phone phone)
     {
         try
         {
             var containerName = $"whatsapp_{phone.Number.Replace("+", "")}";
-            var phoneIndex = phone.Number.Replace("+", "").Substring(Math.Max(0, phone.Number.Length - 4));
-            
+            var phoneIndex    = phone.Number.Replace("+", "")
+                                    .Substring(Math.Max(0, phone.Number.Replace("+", "").Length - 3));
+
+            // ── חישוב ports לפי hash ─────────────────────────────
+            var (fastApiPort, baileysPort) = PortHashCalculator.GetBothPorts(
+                phone.Number, _configuration);
+
+            _logger.LogInformation(
+                "Phone {Phone} → FastAPI:{FastApi} Baileys:{Baileys}",
+                phone.Number, fastApiPort, baileysPort);
+
             // Data paths
-            var basePath = _dockerSettings.DataBasePath;
-            var authPath = Path.Combine(basePath, $"auth_{phoneIndex}");
-            var redisPath = Path.Combine(basePath, $"redis_{phoneIndex}");
-            var logsPath = Path.Combine(basePath, $"logs_{phoneIndex}");
+            var basePath     = _dockerSettings.DataBasePath;
+            var authPath     = Path.Combine(basePath, $"auth_{phoneIndex}");
+            var redisPath    = Path.Combine(basePath, $"redis_{phoneIndex}");
+            var logsPath     = Path.Combine(basePath, $"logs_{phoneIndex}");
             var contactsPath = Path.Combine(basePath, $"contacts_{phoneIndex}");
 
-            // Ensure directories exist (only on Linux/Mac - Windows handles differently)
             if (!OperatingSystem.IsWindows())
             {
                 Directory.CreateDirectory(authPath);
@@ -108,90 +106,86 @@ public class DockerService : IDockerService, IDisposable
                 Directory.CreateDirectory(contactsPath);
             }
 
-            _logger.LogInformation("Creating container {ContainerName} with ports {ApiPort}:{WsPort}", 
-                containerName, apiPort, wsPort);
-
-            // Check if container already exists
-            var existingContainers = await _client.Containers.ListContainersAsync(
-                new ContainersListParameters { All = true });
-            
-            var existing = existingContainers.FirstOrDefault(c => 
+            // בדוק אם קונטיינר קיים ומחק
+            var existingContainers = await _client.Containers
+                .ListContainersAsync(new ContainersListParameters { All = true });
+            var existing = existingContainers.FirstOrDefault(c =>
                 c.Names.Any(n => n.TrimStart('/') == containerName));
-            
             if (existing != null)
             {
-                _logger.LogWarning("Container {ContainerName} already exists, removing...", containerName);
+                _logger.LogWarning("Container {Name} already exists, removing...", containerName);
                 await RemoveContainerAsync(existing.ID);
             }
 
-            // Create container
-            var createResponse = await _client.Containers.CreateContainerAsync(new CreateContainerParameters
-            {
-                Image = _dockerSettings.ImageName,
-                Name = containerName,
-                Env = new List<string>
+            var createResponse = await _client.Containers
+                .CreateContainerAsync(new CreateContainerParameters
                 {
-                    $"TZ={_dockerSettings.Timezone}",
-                    $"PHONE_NUMBER={phone.Number}",
-                    $"PHONE_ID={phone.Id}"
-                },
-                ExposedPorts = new Dictionary<string, EmptyStruct>
-                {
-                    { "8000/tcp", default },
-                    { "3001/tcp", default }
-                },
-                HostConfig = new HostConfig
-                {
-                    PortBindings = new Dictionary<string, IList<PortBinding>>
+                    Image = _dockerSettings.ImageName,
+                    Name  = containerName,
+                    Env   = new List<string>
                     {
-                        { 
-                            "8000/tcp", 
-                            new List<PortBinding> { new() { HostPort = apiPort.ToString() } } 
+                        $"TZ={_dockerSettings.Timezone}",
+                        $"PHONE_NUMBER={phone.Number}",
+                        $"PHONE_ID={phone.Id}",
+                    },
+                    // הקונטיינר מאזין תמיד על 8000 (FastAPI) ו-3001 (Baileys)
+                    ExposedPorts = new Dictionary<string, EmptyStruct>
+                    {
+                        { "8000/tcp", default },
+                        { "3001/tcp", default }
+                    },
+                    HostConfig = new HostConfig
+                    {
+                        PortBindings = new Dictionary<string, IList<PortBinding>>
+                        {
+                            {
+                                "8000/tcp",
+                                new List<PortBinding> { new() { HostPort = fastApiPort.ToString() } }
+                            },
+                            {
+                                "3001/tcp",
+                                new List<PortBinding> { new() { HostPort = baileysPort.ToString() } }
+                            }
                         },
-                        { 
-                            "3001/tcp", 
-                            new List<PortBinding> { new() { HostPort = wsPort.ToString() } } 
-                        }
+                        Binds = new List<string>
+                        {
+                            $"{authPath}:/app/auth_info",
+                            $"{redisPath}:/var/lib/redis",
+                            $"{logsPath}:/var/log",
+                            $"{contactsPath}:/app/data"
+                        },
+                        RestartPolicy = new RestartPolicy { Name = RestartPolicyKind.UnlessStopped },
+                        Memory    = 512 * 1024 * 1024,
+                        CPUShares = 512
                     },
-                    Binds = new List<string>
+                    Labels = new Dictionary<string, string>
                     {
-                        $"{authPath}:/app/authinfo",
-                        $"{redisPath}:/var/lib/redis",
-                        $"{logsPath}:/var/log",
-                        $"{contactsPath}:/app/data"
-                    },
-                    RestartPolicy = new RestartPolicy
-                    {
-                        Name = RestartPolicyKind.UnlessStopped
-                    },
-                    Memory = 512 * 1024 * 1024, // 512MB limit
-                    CPUShares = 512
-                },
-                Labels = new Dictionary<string, string>
-                {
-                    { "app", "whatsapp-manager" },
-                    { "phone_id", phone.Id.ToString() },
-                    { "phone_number", phone.Number }
-                }
-            });
+                        { "app",          "whatsapp-manager" },
+                        { "phone_id",     phone.Id.ToString() },
+                        { "phone_number", phone.Number },
+                        { "fastapi_port", fastApiPort.ToString() },
+                        { "baileys_port", baileysPort.ToString() }
+                    }
+                });
 
-            _logger.LogInformation("Container created with ID: {ContainerId}", createResponse.ID);
+            var started = await _client.Containers
+                .StartContainerAsync(createResponse.ID, new ContainerStartParameters());
 
-            // Start container
-            var started = await _client.Containers.StartContainerAsync(createResponse.ID, new ContainerStartParameters());
-            
-            if (started)
+            if (!started)
             {
-                _logger.LogInformation("Container {ContainerName} started successfully", containerName);
-                return createResponse.ID;
+                _logger.LogError("Failed to start container {Name}", containerName);
+                return null;
             }
 
-            _logger.LogError("Failed to start container {ContainerName}", containerName);
-            return null;
+            _logger.LogInformation(
+                "Container {Name} started. FastAPI:{FastApi} Baileys:{Baileys}",
+                containerName, fastApiPort, baileysPort);
+
+            return createResponse.ID;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error creating container for phone {PhoneNumber}", phone.Number);
+            _logger.LogError(ex, "Error creating container for phone {Phone}", phone.Number);
             return null;
         }
     }
@@ -218,16 +212,12 @@ public class DockerService : IDockerService, IDisposable
     {
         try
         {
-            // Try to stop first
-            try
-            {
-                await StopContainerAsync(containerId);
-            }
-            catch { /* Ignore if already stopped */ }
+            try { await StopContainerAsync(containerId); }
+            catch { }
 
             await _client.Containers.RemoveContainerAsync(containerId, new ContainerRemoveParameters
             {
-                Force = true,
+                Force         = true,
                 RemoveVolumes = false
             });
             _logger.LogInformation("Container {ContainerId} removed", containerId);
@@ -272,7 +262,7 @@ public class DockerService : IDockerService, IDisposable
         {
             return await _client.Containers.ListContainersAsync(new ContainersListParameters
             {
-                All = all,
+                All     = all,
                 Filters = new Dictionary<string, IDictionary<string, bool>>
                 {
                     { "label", new Dictionary<string, bool> { { "app=whatsapp-manager", true } } }
@@ -290,13 +280,9 @@ public class DockerService : IDockerService, IDisposable
     {
         try
         {
-            // First check if container is running
             if (!await IsContainerRunningAsync(containerId))
-            {
                 return false;
-            }
 
-            // Try to hit the health endpoint
             using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
             var response = await httpClient.GetAsync($"http://localhost:{apiPort}/health");
             return response.IsSuccessStatusCode;

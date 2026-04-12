@@ -19,6 +19,10 @@ public interface ISupabaseService
     Task<DbHost?> GetHostByIdAsync(Guid hostId);
     Task SetHostStatusAsync(Guid hostId, string status);
     Task<int> GetNextAvailablePortAsync(Guid hostId, int rangeStart, int rangeEnd);
+
+    Task<Phone?> GetPhoneByNumberAsync(string phoneNumber);   // חדש
+    Task<Phone>  CreatePhoneAsync(Phone phone);               // חדש
+    Task<List<Phone>> GetAllPhonesAsync();                    // 
 }
 
 public class SupabaseService : ISupabaseService
@@ -319,4 +323,53 @@ var key = Environment.GetEnvironmentVariable("SUPABASE_KEY")
             throw;
         }
     }
+
+     
+// ── Implementation additions ──────────────────────────────────────────────────
+public async Task<Phone?> GetPhoneByNumberAsync(string phoneNumber)
+{
+    try
+    {
+        var response = await _client.From<Phone>()
+            .Where(p => p.Number == phoneNumber)
+            .Get();
+        return response.Models.FirstOrDefault();
+    }
+    catch (Exception ex)
+    {
+        _logger.LogError(ex, "Error getting phone by number {Number}", phoneNumber);
+        return null;
+    }
+}
+ 
+public async Task<Phone> CreatePhoneAsync(Phone phone)
+{
+    try
+    {
+        var response = await _client.From<Phone>().Insert(phone);
+        return response.Models.First();
+    }
+    catch (Exception ex)
+    {
+        _logger.LogError(ex, "Error creating phone {Number}", phone.Number);
+        throw;
+    }
+}
+ 
+public async Task<List<Phone>> GetAllPhonesAsync()
+{
+    try
+    {
+        var response = await _client.From<Phone>()
+            .Where(p => p.Status == "active")
+            .Get();
+        return response.Models;
+    }
+    catch (Exception ex)
+    {
+        _logger.LogError(ex, "Error getting all phones");
+        return new List<Phone>();
+    }
+}
+ 
 }

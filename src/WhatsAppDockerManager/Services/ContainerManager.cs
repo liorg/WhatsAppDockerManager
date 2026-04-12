@@ -3,7 +3,8 @@ using WhatsAppDockerManager.Models;
 using DbHost = WhatsAppDockerManager.Models.Host;
 using Supabase;
 namespace WhatsAppDockerManager.Services;
-
+/// <summary>
+/// FROM LINUX anages Docker containers for phones, including starting/stopping containers, syncing with database, and
 public interface IContainerManager
 {
     Task InitializeAsync();
@@ -82,7 +83,7 @@ public class ContainerManager : IContainerManager
         }
         finally
         {
-            _initLock.Release();
+            _initLock.Release();//p$P4s49RKh36y_Pv_P4
         }
     }
 
@@ -110,7 +111,7 @@ public class ContainerManager : IContainerManager
             var wsPort = apiPort + 1000; // WS port is API port + 1000
 
             // Create and start container
-            var containerId = await _dockerService.CreateAndStartContainerAsync(phone, apiPort, wsPort);
+            var containerId = await _dockerService.CreateAndStartContainerAsync(phone);
 
             if (containerId == null)
             {

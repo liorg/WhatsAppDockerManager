@@ -3,7 +3,7 @@ using Supabase.Postgrest.Models;
 
 namespace WhatsAppDockerManager.Models;
 
-[Table("hosts")]
+[Table("agent_hosts")]
 public class Host : BaseModel
 {
     [PrimaryKey("id")]

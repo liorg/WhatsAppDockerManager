@@ -143,53 +143,8 @@ cp .env.example .env
 nano .env
 ```
 
-### 2. עדכון Database
 
-הרץ את ה-SQL ב-Supabase:
-
-```sql
--- טבלת שרתים (Hosts)
-CREATE TABLE IF NOT EXISTS hosts (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    host_name VARCHAR(255) NOT NULL UNIQUE,
-    ip_address VARCHAR(45) NOT NULL,
-    external_ip VARCHAR(45),
-    status VARCHAR(20) DEFAULT 'active',
-    last_heartbeat TIMESTAMPTZ DEFAULT NOW(),
-    max_containers INT DEFAULT 50,
-    port_range_start INT DEFAULT 8001,
-    port_range_end INT DEFAULT 8100,
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- הוספת שדות לטבלת phones
-ALTER TABLE phones 
-ADD COLUMN IF NOT EXISTS host_id UUID REFERENCES hosts(id),
-ADD COLUMN IF NOT EXISTS container_id VARCHAR(100),
-ADD COLUMN IF NOT EXISTS container_name VARCHAR(100),
-ADD COLUMN IF NOT EXISTS api_port INT,
-ADD COLUMN IF NOT EXISTS ws_port INT,
-ADD COLUMN IF NOT EXISTS last_health_check TIMESTAMPTZ,
-ADD COLUMN IF NOT EXISTS error_message TEXT;
-
--- טבלת אירועים
-CREATE TABLE IF NOT EXISTS container_events (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    phone_id UUID REFERENCES phones(id),
-    host_id UUID REFERENCES hosts(id),
-    event_type VARCHAR(50),
-    event_data JSONB,
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- Indexes
-CREATE INDEX IF NOT EXISTS idx_phones_host ON phones(host_id);
-CREATE INDEX IF NOT EXISTS idx_phones_docker_status ON phones(docker_status);
-CREATE INDEX IF NOT EXISTS idx_hosts_status ON hosts(status);
-```
-
-### 3. הרצה
+### 2. הרצה
 
 #### Option A: עם Docker Compose (מומלץ לproduction)
 ```bash
@@ -336,6 +291,10 @@ export AppSettings__Host__HostName="host-2"
 export AppSettings__Host__ExternalIp="5.6.7.8"
 dotnet run
 ```
+LINK:
+
+http://localhost:5000/swagger/index.html
+
 
 ## Troubleshooting
 
@@ -378,6 +337,82 @@ dotnet test
 dotnet publish -c Release -o ./publish
 ```
 
+
+# עצור והסר את כל הקונטיינרים של whatsapp
+docker ps -a --filter "label=app=whatsapp-manager" --format "{{.ID}}" | xargs -r docker rm -f
+
+# מחק את כל הנתונים
+sudo rm -rf /opt/whatsapp-data/*
+
+# מחק לוגים של ה-.NET
+rm -rf ./logs/*
+
+
+# ── עצור והסר כל קונטיינרים של whatsapp ─────────────────
+docker ps -a --filter "label=app=whatsapp-manager" --format "{{.ID}}" | xargs -r docker rm -f
+
+# ── מחק נתונים ───────────────────────────────────────────
+sudo rm -rf /opt/whatsapp-data/*
+
+# ── מחק לוגים ────────────────────────────────────────────
+rm -rf ./logs/*
+
+# ── נקה טבלאות Supabase ──────────────────────────────────
+# הרץ ב-Supabase SQL Editor:
+# TRUNCATE TABLE phones RESTART IDENTITY CASCADE;
+# TRUNCATE TABLE agent_hosts RESTART IDENTITY CASCADE;
+# TRUNCATE TABLE agent_events RESTART IDENTITY CASCADE;
+# TRUNCATE TABLE contact_log RESTART IDENTITY CASCADE;
+
+
+# בדוק שהכל נקי
+docker ps -a
+ls /opt/whatsapp-data/
+
+
+
+
+# ── צור תיקייה עם הרשאות נכונות ─────────────────────────
+sudo mkdir -p /opt/whatsapp-data
+sudo chown $USER:$USER /opt/whatsapp-data
+sudo chmod 755 /opt/whatsapp-data
+
+# ── הרשאות לתת-תיקיות שנוצרות דינמית ────────────────────
+# הוסף את המשתמש לקבוצת docker
+sudo usermod -aG docker $USER
+
+# ── systemd service (פרודקשן) ────────────────────────────
+sudo tee /etc/systemd/system/whatsapp-manager.service << 'EOF'
+[Unit]
+Description=WhatsApp Docker Manager
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=lior
+WorkingDirectory=/home/lior/projects/github/WhatsAppDockerManager/src/WhatsAppDockerManager
+ExecStart=/usr/bin/dotnet run --configuration Release
+Restart=always
+RestartSec=10
+Environment=ASPNETCORE_ENVIRONMENT=Production
+Environment=SUPABASE_URL=your_url
+Environment=SUPABASE_KEY=your_key
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable whatsapp-manager
+sudo systemctl start whatsapp-manager
+
+# ── בדיקה ────────────────────────────────────────────────
+sudo systemctl status whatsapp-manager
+journalctl -u whatsapp-manager -f
+
 ## רישיון
 
 MIT
+
+

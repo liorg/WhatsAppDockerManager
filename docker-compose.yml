@@ -8,8 +8,8 @@ services:
     container_name: whatsapp-manager
     restart: unless-stopped
     ports:
-      - "5000:5000"           # API & HTTP Proxy
-      - "9001-9100:9001-9100" # TCP Proxy ports (WebSocket)
+      - "8000-8999:8000-8999"          # API & HTTP Proxy
+      - "9000-9999:9000-9999"  # TCP Proxy ports (WebSocket)
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock  # Docker socket for managing containers
       - ./whatsapp-data:/opt/whatsapp-data          # Shared data directory
