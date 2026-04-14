@@ -14,8 +14,34 @@
 - ✅ **Webhook Integration** - קבלת events מ-containers
 
 ## ארכיטקטורה
-
+┌─────────────────────────────────────────────────────────────────┐
+│                    .NET Core Agent (Port 5000)                   │
+│                                                                  │
+│  ┌─────────────────┐    ┌─────────────────────────────────────┐ │
+│  │ ContainerManager│───▶│ RegisterWebhookInContainerAsync()  │ │
+│  │   (on startup)  │    │ רושם את עצמו כ-webhook בכל קונטיינר│ │
+│  └─────────────────┘    └─────────────────────────────────────┘ │
+│                                                                  │
+│  ┌─────────────────────────────────────────────────────────────┐│
+│  │ POST /api/webhook/container-event/{phoneId}                 ││
+│  │  • authenticated → עדכון סטטוס + מספר טלפון                  ││
+│  │  • message → UpsertContact + AddMessage                     ││
+│  │  • disconnected → עדכון סטטוס שגיאה                          ││
+│  └─────────────────────────────────────────────────────────────┘│
+└─────────────────────────────────────────────────────────────────┘
+                              ▲
+                              │ webhook (פנימי)
+                              │
+┌─────────────────────────────┴───────────────────────────────────┐
+│              Docker Container (FastAPI - Port 8001+)             │
+│                                                                  │
+│  כל הודעה נכנסת → שולח POST ל-Agent                              │
+│  /internal/baileys-event                                         │
+└─────────────────────────────────────────────────────────────────┘
 ```
+## LAYERS
+
+
 ┌─────────────────────────────────────────────────────────────────────┐
 │                           Frontend (React)                          │
 │                                                                     │
@@ -145,7 +171,7 @@ nano .env
 
 
 ### 2. הרצה
-
+──────────────────────────────────────────
 #### Option A: עם Docker Compose (מומלץ לproduction)
 ```bash
 docker-compose up -d
@@ -239,36 +265,6 @@ POST /api/webhook/container-status  # עדכון סטטוס מהcontainer
 POST /api/webhook/host-register     # רישום שרת חדש
 ```
 
-## ארכיטקטורה
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                    .NET Core Host                       │
-├─────────────────────────────────────────────────────────┤
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────┐ │
-│  │ HTTP Proxy  │  │  Container  │  │  Background     │ │
-│  │   (YARP)    │  │  Manager    │  │  Services       │ │
-│  └──────┬──────┘  └──────┬──────┘  └────────┬────────┘ │
-│         │                │                   │          │
-│  ┌──────┴──────┐  ┌──────┴──────┐  ┌────────┴────────┐ │
-│  │ TCP Proxy   │  │   Docker    │  │  - Heartbeat    │ │
-│  │ (WebSocket) │  │   Service   │  │  - HealthCheck  │ │
-│  └─────────────┘  └─────────────┘  │  - Sync         │ │
-│                                     └─────────────────┘ │
-│                          │                              │
-│                   ┌──────┴──────┐                       │
-│                   │  Supabase   │                       │
-│                   │   Client    │                       │
-│                   └─────────────┘                       │
-├─────────────────────────────────────────────────────────┤
-│  Docker Containers                                      │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐              │
-│  │ WhatsApp │  │ WhatsApp │  │ WhatsApp │    ...       │
-│  │  Phone 1 │  │  Phone 2 │  │  Phone 3 │              │
-│  │  :8001   │  │  :8002   │  │  :8003   │              │
-│  └──────────┘  └──────────┘  └──────────┘              │
-└─────────────────────────────────────────────────────────┘
-```
 
 ## High Availability
 
@@ -336,7 +332,7 @@ dotnet test
 # Build for production
 dotnet publish -c Release -o ./publish
 ```
-
+docker ps -a
 
 # עצור והסר את כל הקונטיינרים של whatsapp
 docker ps -a --filter "label=app=whatsapp-manager" --format "{{.ID}}" | xargs -r docker rm -f
@@ -347,41 +343,37 @@ sudo rm -rf /opt/whatsapp-data/*
 # מחק לוגים של ה-.NET
 rm -rf ./logs/*
 
-
-# ── עצור והסר כל קונטיינרים של whatsapp ─────────────────
+# ── עצור והסר כל קונטיינרים של whatsapp 
 docker ps -a --filter "label=app=whatsapp-manager" --format "{{.ID}}" | xargs -r docker rm -f
 
-# ── מחק נתונים ───────────────────────────────────────────
+# ── מחק נתונים 
 sudo rm -rf /opt/whatsapp-data/*
 
-# ── מחק לוגים ────────────────────────────────────────────
+# ── מחק לוגים 
 rm -rf ./logs/*
 
-# ── נקה טבלאות Supabase ──────────────────────────────────
+# ── נקה טבלאות Supabase
 # הרץ ב-Supabase SQL Editor:
-# TRUNCATE TABLE phones RESTART IDENTITY CASCADE;
-# TRUNCATE TABLE agent_hosts RESTART IDENTITY CASCADE;
-# TRUNCATE TABLE agent_events RESTART IDENTITY CASCADE;
-# TRUNCATE TABLE contact_log RESTART IDENTITY CASCADE;
+ TRUNCATE TABLE phones RESTART IDENTITY CASCADE;
+ TRUNCATE TABLE agent_hosts RESTART IDENTITY CASCADE;
+ TRUNCATE TABLE agent_events RESTART IDENTITY CASCADE;
+ TRUNCATE TABLE contact_log RESTART IDENTITY CASCADE;
 
 
 # בדוק שהכל נקי
 docker ps -a
 ls /opt/whatsapp-data/
 
-
-
-
-# ── צור תיקייה עם הרשאות נכונות ─────────────────────────
+# ── צור תיקייה עם הרשאות נכונות 
 sudo mkdir -p /opt/whatsapp-data
 sudo chown $USER:$USER /opt/whatsapp-data
 sudo chmod 755 /opt/whatsapp-data
 
-# ── הרשאות לתת-תיקיות שנוצרות דינמית ────────────────────
+# ── הרשאות לתת-תיקיות שנוצרות דינמית 
 # הוסף את המשתמש לקבוצת docker
 sudo usermod -aG docker $USER
 
-# ── systemd service (פרודקשן) ────────────────────────────
+# ── systemd service (פרודקשן) 
 sudo tee /etc/systemd/system/whatsapp-manager.service << 'EOF'
 [Unit]
 Description=WhatsApp Docker Manager
@@ -407,9 +399,12 @@ sudo systemctl daemon-reload
 sudo systemctl enable whatsapp-manager
 sudo systemctl start whatsapp-manager
 
-# ── בדיקה ────────────────────────────────────────────────
+# ── בדיקה 
 sudo systemctl status whatsapp-manager
 journalctl -u whatsapp-manager -f
+
+
+docker logs whatsapp_972-XXXXXXX --tail 50
 
 ## רישיון
 

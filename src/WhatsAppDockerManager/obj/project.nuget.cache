@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "dgSpecHash": "EJ0G8XPQzzR9K13tgyHBXNBO37u5mXPpm5qo4MwadJ9YDD6t+TgQ2Eo46ObMSMw4YfBA8M5x3Z9TFoISN+q9DQ==",
+  "dgSpecHash": "k3PwsJxEkCssDr/9On3E+KZ+ZfgYbCuD/jFpueUFEW+yPMwtvDrne3nivNLB5ubBtQ2zdolgayfziLTvV0CsOA==",
   "success": true,
   "projectFilePath": "/home/lior/projects/github/WhatsAppDockerManager/src/WhatsAppDockerManager/WhatsAppDockerManager.csproj",
   "expectedPackageFiles": [
@@ -110,8 +110,6 @@
     "/home/lior/.nuget/packages/system.io.compression.zipfile/4.3.0/system.io.compression.zipfile.4.3.0.nupkg.sha512",
     "/home/lior/.nuget/packages/system.io.filesystem/4.3.0/system.io.filesystem.4.3.0.nupkg.sha512",
     "/home/lior/.nuget/packages/system.io.filesystem.primitives/4.3.0/system.io.filesystem.primitives.4.3.0.nupkg.sha512",
-    "/home/lior/.nuget/packages/system.io.hashing/7.0.0/system.io.hashing.7.0.0.nupkg.sha512",
-    "/home/lior/.nuget/packages/system.io.pipelines/8.0.0/system.io.pipelines.8.0.0.nupkg.sha512",
     "/home/lior/.nuget/packages/system.linq/4.3.0/system.linq.4.3.0.nupkg.sha512",
     "/home/lior/.nuget/packages/system.linq.expressions/4.3.0/system.linq.expressions.4.3.0.nupkg.sha512",
     "/home/lior/.nuget/packages/system.net.http/4.3.4/system.net.http.4.3.4.nupkg.sha512",
@@ -153,8 +151,7 @@
     "/home/lior/.nuget/packages/system.threading.timer/4.3.0/system.threading.timer.4.3.0.nupkg.sha512",
     "/home/lior/.nuget/packages/system.xml.readerwriter/4.3.0/system.xml.readerwriter.4.3.0.nupkg.sha512",
     "/home/lior/.nuget/packages/system.xml.xdocument/4.3.0/system.xml.xdocument.4.3.0.nupkg.sha512",
-    "/home/lior/.nuget/packages/websocket.client/5.1.1/websocket.client.5.1.1.nupkg.sha512",
-    "/home/lior/.nuget/packages/yarp.reverseproxy/2.1.0/yarp.reverseproxy.2.1.0.nupkg.sha512"
+    "/home/lior/.nuget/packages/websocket.client/5.1.1/websocket.client.5.1.1.nupkg.sha512"
   ],
   "logs": []
 }

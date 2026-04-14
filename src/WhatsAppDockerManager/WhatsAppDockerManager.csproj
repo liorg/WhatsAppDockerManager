@@ -18,11 +18,7 @@
     
     <!-- Supabase -->
     
-    <!-- HTTP Proxy (YARP) -->
-    <PackageReference Include="Yarp.ReverseProxy" Version="2.1.0" />
-    
-    <!-- TCP Proxy -->
-    <PackageReference Include="System.IO.Pipelines" Version="8.0.0" />
+
     
     <!-- Background Services -->
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.0" />

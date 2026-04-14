@@ -92,6 +92,114 @@ public class Phone : BaseModel
     public DateTime CreatedAt { get; set; }
 }
 
+[Table("contacts")]
+public class Contact : BaseModel
+{
+    [PrimaryKey("id")]
+    public Guid Id { get; set; }
+
+    [Column("phone_id")]
+    public Guid? PhoneId { get; set; }
+
+    [Column("lid")]
+    public string? Lid { get; set; }
+
+    [Column("number")]
+    public string Number { get; set; } = string.Empty;
+
+    [Column("name")]
+    public string? Name { get; set; }
+
+    [Column("email")]
+    public string? Email { get; set; }
+
+    [Column("avatar")]
+    public string? Avatar { get; set; }
+
+    [Column("tag")]
+    public string? Tag { get; set; }
+
+    [Column("is_bot")]
+    public bool? IsBot { get; set; }
+
+    [Column("is_connect")]
+    public bool? IsConnect { get; set; }
+
+    [Column("created_at")]
+    public DateTime? CreatedAt { get; set; }
+}
+
+[Table("messages")]
+public class Message : BaseModel
+{
+    [PrimaryKey("id")]
+    public Guid Id { get; set; }
+
+    [Column("call_id")]
+    public Guid? CallId { get; set; }
+
+    [Column("sender")]
+    public string Sender { get; set; } = string.Empty;
+
+    [Column("content")]
+    public string Content { get; set; } = "{}";
+
+    [Column("status")]
+    public string? Status { get; set; }
+
+    [Column("sent_at")]
+    public DateTime? SentAt { get; set; }
+
+    [Column("leaf_id")]
+    public string? LeafId { get; set; }
+
+    [Column("direction")]
+    public bool Direction { get; set; }
+
+    [Column("retry_counter")]
+    public int RetryCounter { get; set; }
+
+    [Column("tool_tip")]
+    public string? ToolTip { get; set; }
+}
+
+[Table("calls")]
+public class Call : BaseModel
+{
+    [PrimaryKey("id")]
+    public Guid Id { get; set; }
+
+    [Column("phone_id")]
+    public Guid? PhoneId { get; set; }
+
+    [Column("contact_id")]
+    public Guid? ContactId { get; set; }
+
+    [Column("scenario_id")]
+    public Guid? ScenarioId { get; set; }
+
+    [Column("status")]
+    public string Status { get; set; } = "active";
+
+    [Column("started_at")]
+    public DateTime? StartedAt { get; set; }
+
+    [Column("ended_at")]
+    public DateTime? EndedAt { get; set; }
+
+    [Column("created_at")]
+    public DateTime? CreatedAt { get; set; }
+
+    [Column("expected_end")]
+    public DateTime? ExpectedEnd { get; set; }
+
+    [Column("last_status_id")]
+    public Guid? LastStatusId { get; set; }
+
+    [Column("last_status_updated_at")]
+    public DateTime? LastStatusUpdatedAt { get; set; }
+}
+
 [Table("container_events")]
 public class ContainerEvent : BaseModel
 {

@@ -43,10 +43,8 @@
 /home/lior/projects/github/WhatsAppDockerManager/src/WhatsAppDockerManager/bin/Debug/net8.0/Swashbuckle.AspNetCore.SwaggerGen.dll
 /home/lior/projects/github/WhatsAppDockerManager/src/WhatsAppDockerManager/bin/Debug/net8.0/Swashbuckle.AspNetCore.SwaggerUI.dll
 /home/lior/projects/github/WhatsAppDockerManager/src/WhatsAppDockerManager/bin/Debug/net8.0/System.IdentityModel.Tokens.Jwt.dll
-/home/lior/projects/github/WhatsAppDockerManager/src/WhatsAppDockerManager/bin/Debug/net8.0/System.IO.Hashing.dll
 /home/lior/projects/github/WhatsAppDockerManager/src/WhatsAppDockerManager/bin/Debug/net8.0/System.Reactive.dll
 /home/lior/projects/github/WhatsAppDockerManager/src/WhatsAppDockerManager/bin/Debug/net8.0/Websocket.Client.dll
-/home/lior/projects/github/WhatsAppDockerManager/src/WhatsAppDockerManager/bin/Debug/net8.0/Yarp.ReverseProxy.dll
 /home/lior/projects/github/WhatsAppDockerManager/src/WhatsAppDockerManager/obj/Debug/net8.0/staticwebassets.build.json
 /home/lior/projects/github/WhatsAppDockerManager/src/WhatsAppDockerManager/obj/Debug/net8.0/staticwebassets.development.json
 /home/lior/projects/github/WhatsAppDockerManager/src/WhatsAppDockerManager/obj/Debug/net8.0/staticwebassets/msbuild.WhatsAppDockerManager.Microsoft.AspNetCore.StaticWebAssets.props

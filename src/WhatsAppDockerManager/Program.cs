@@ -1,9 +1,7 @@
 using Serilog;
 using WhatsAppDockerManager.Configuration;
 using WhatsAppDockerManager.Services;
-using WhatsAppDockerManager.Services.Background;
-using WhatsAppDockerManager.Services.Proxy;
-using Yarp.ReverseProxy.Configuration;
+
 DotNetEnv.Env.Load();
 var builder = WebApplication.CreateBuilder(args);
 
@@ -32,26 +30,43 @@ builder.Services.AddSingleton<ISupabaseService, SupabaseService>();
 builder.Services.AddSingleton<IDockerService, DockerService>();
 builder.Services.AddSingleton<IContainerManager, ContainerManager>();
 
-// Proxy services
-builder.Services.AddSingleton<DynamicProxyConfigProvider>();
-builder.Services.AddSingleton<IProxyConfigProvider>(sp => sp.GetRequiredService<DynamicProxyConfigProvider>());
-
-// Background services
-builder.Services.AddHostedService<HeartbeatService>();
-builder.Services.AddHostedService<HealthCheckService>();
-builder.Services.AddHostedService<ContainerSyncService>();
-builder.Services.AddHostedService<ProxyRouteSyncService>();
-builder.Services.AddHostedService<TcpProxyService>();
-
-// YARP Reverse Proxy
-builder.Services.AddReverseProxy();
+// HTTP Client Factory for outgoing requests
+builder.Services.AddHttpClient();
 
 // Controllers
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
-    c.SwaggerDoc("v1", new() { Title = "WhatsApp Docker Manager API", Version = "v1" });
+    c.SwaggerDoc("v1", new() 
+    { 
+        Title = "WhatsApp Docker Manager API", 
+        Version = "v2.0",
+        Description = @"
+## WhatsApp Docker Manager API
+
+### Phones
+- `GET /api/phones` - רשימת כל הטלפונים
+- `GET /api/phones/{phoneId}` - פרטי טלפון
+
+### Send Messages (מעטפת - Docker לא חשוף)
+- `POST /api/phones/{phoneId}/send/text` - שליחת טקסט
+- `POST /api/phones/{phoneId}/send/buttons` - שליחת כפתורים
+- `POST /api/phones/{phoneId}/send/list` - שליחת תפריט
+- `POST /api/phones/{phoneId}/send/button-response` - סימולציית לחיצת כפתור
+- `POST /api/phones/{phoneId}/send/list-response` - סימולציית בחירה מתפריט
+- `GET /api/phones/{phoneId}/send/status` - סטטוס חיבור WhatsApp
+- `GET /api/phones/{phoneId}/send/qrcode` - קבלת QR
+- `GET /api/phones/{phoneId}/send/qrcode/image` - תמונת QR
+
+### Contacts & Messages
+- `GET /api/phones/{phoneId}/contacts` - אנשי קשר
+- `GET /api/phones/{phoneId}/contacts/{contactId}/messages` - היסטוריית הודעות
+
+### Internal (אוטומטי)
+- `POST /api/webhook/container-event/{phoneId}` - קבלת אירועים מהקונטיינרים
+"
+    });
 });
 
 // CORS
@@ -72,19 +87,13 @@ var containerManager = app.Services.GetRequiredService<IContainerManager>();
 await containerManager.InitializeAsync();
 
 // Configure pipeline
-//if (app.Environment.IsDevelopment())
-{
-    app.UseSwagger();
-    app.UseSwaggerUI();
-}
+app.UseSwagger();
+app.UseSwaggerUI();
 
 app.UseCors();
 app.UseSerilogRequestLogging();
 
 app.MapControllers();
-
-// YARP reverse proxy - this handles /api/phone/{number}/** and /api/id/{id}/** routes
-app.MapReverseProxy();
 
 // Health check endpoint
 app.MapGet("/health", () => Results.Ok(new { status = "healthy", timestamp = DateTime.UtcNow }));

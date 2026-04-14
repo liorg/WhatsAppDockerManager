@@ -3,8 +3,10 @@ using WhatsAppDockerManager.Models;
 using DbHost = WhatsAppDockerManager.Models.Host;
 using Supabase;
 namespace WhatsAppDockerManager.Services;
+
 /// <summary>
-/// FROM LINUX anages Docker containers for phones, including starting/stopping containers, syncing with database, and
+/// Manages Docker containers for phones, including starting/stopping containers, syncing with database
+/// </summary>
 public interface IContainerManager
 {
     Task InitializeAsync();
@@ -21,6 +23,7 @@ public class ContainerManager : IContainerManager
 {
     private readonly IDockerService _dockerService;
     private readonly ISupabaseService _supabaseService;
+    private readonly IConfiguration _configuration;
     private readonly ILogger<ContainerManager> _logger;
     private readonly HostSettings _hostSettings;
     private readonly DockerSettings _dockerSettings;
@@ -40,6 +43,7 @@ public class ContainerManager : IContainerManager
     {
         _dockerService = dockerService;
         _supabaseService = supabaseService;
+        _configuration = configuration;
         _logger = logger;
         _hostSettings = configuration.GetSection("AppSettings:Host").Get<HostSettings>() ?? new();
         _dockerSettings = configuration.GetSection("AppSettings:Docker").Get<DockerSettings>() ?? new();
@@ -83,7 +87,7 @@ public class ContainerManager : IContainerManager
         }
         finally
         {
-            _initLock.Release();//p$P4s49RKh36y_Pv_P4
+            _initLock.Release();
         }
     }
 
@@ -102,15 +106,10 @@ public class ContainerManager : IContainerManager
             // Update status to starting
             await _supabaseService.UpdatePhoneDockerStatusAsync(phone.Id, PhoneDockerStatus.Starting);
 
-            // Get available port
-            var apiPort = await _supabaseService.GetNextAvailablePortAsync(
-                _currentHost.Id,
-                _hostSettings.PortRangeStart,
-                _hostSettings.PortRangeEnd
-            );
-            var wsPort = apiPort + 1000; // WS port is API port + 1000
+            // Calculate port using same method as DockerService
+            var apiPort = PortHashCalculator.GetFastApiPort(phone.Number, _configuration);
 
-            // Create and start container
+            // Create and start container (uses same PortHashCalculator internally)
             var containerId = await _dockerService.CreateAndStartContainerAsync(phone);
 
             if (containerId == null)
@@ -120,17 +119,18 @@ public class ContainerManager : IContainerManager
                     PhoneDockerStatus.Error,
                     errorMessage: "Failed to create container"
                 );
-                await _supabaseService.LogContainerEventAsync(
-                    phone.Id, 
+                await _supabaseService.LogAgentEventAsync(
                     _currentHost.Id, 
-                    ContainerEventType.Error,
-                    new { error = "Failed to create container" }
+                    AgentEventType.Error,
+                    new { phoneId = phone.Id, error = "Failed to create container" }
                 );
                 return false;
             }
 
-            // Build Docker URL
-            var host = _hostSettings.ExternalIp ?? _hostSettings.IpAddress;
+            // Build Docker URL (only FastAPI port exposed)
+            var host = !string.IsNullOrEmpty(_hostSettings.ExternalIp) ? _hostSettings.ExternalIp 
+                     : !string.IsNullOrEmpty(_hostSettings.IpAddress) ? _hostSettings.IpAddress 
+                     : "localhost";
             var dockerUrl = $"http://{host}:{apiPort}";
 
             // Update phone record
@@ -140,20 +140,18 @@ public class ContainerManager : IContainerManager
                 containerId: containerId,
                 containerName: $"whatsapp_{phone.Number.Replace("+", "")}",
                 apiPort: apiPort,
-                wsPort: wsPort,
                 dockerUrl: dockerUrl
             );
 
             // Register webhook in container to receive events back
             await RegisterWebhookInContainerAsync(apiPort, phone.Id);
 
-            await _supabaseService.LogContainerEventAsync(
-                phone.Id,
+            await _supabaseService.LogAgentEventAsync(
                 _currentHost.Id,
-                ContainerEventType.Started,
-                new { containerId, apiPort, wsPort, dockerUrl }
+                AgentEventType.Started,
+                new { phoneId = phone.Id, containerId, apiPort, dockerUrl }
             );
-
+            
             _logger.LogInformation("Container started for phone {PhoneNumber} on port {Port}", phone.Number, apiPort);
             return true;
         }
@@ -183,14 +181,9 @@ public class ContainerManager : IContainerManager
 
             using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
             
-            // The manager's webhook endpoint
-            var managerWebhook = $"http://host.docker.internal:5000/api/webhook/container-event/{phoneId}";
-            
-            // If running on Linux without host.docker.internal, use the host IP
-            if (!OperatingSystem.IsWindows() && !OperatingSystem.IsMacOS())
-            {
-                managerWebhook = $"http://{_hostSettings.IpAddress}:5000/api/webhook/container-event/{phoneId}";
-            }
+            // Docker bridge IP for Linux containers to reach host
+            var host = "172.17.0.1";
+            var managerWebhook = $"http://{host}:5000/api/webhook/container-event/{phoneId}";
 
             var payload = new
             {
@@ -233,10 +226,10 @@ public class ContainerManager : IContainerManager
             if (success)
             {
                 await _supabaseService.UpdatePhoneDockerStatusAsync(phone.Id, PhoneDockerStatus.Stopped);
-                await _supabaseService.LogContainerEventAsync(
-                    phone.Id,
+                await _supabaseService.LogAgentEventAsync(
                     _currentHost?.Id,
-                    ContainerEventType.Stopped
+                    AgentEventType.Stopped,
+                    new { phoneId = phone.Id }
                 );
             }
 
@@ -344,10 +337,10 @@ public class ContainerManager : IContainerManager
                 {
                     _logger.LogWarning("Phone {PhoneNumber} failed health check", phone.Number);
                     
-                    await _supabaseService.LogContainerEventAsync(
-                        phone.Id,
+                    await _supabaseService.LogAgentEventAsync(
                         _currentHost.Id,
-                        ContainerEventType.HealthCheckFailed
+                        AgentEventType.HealthCheckFailed,
+                        new { phoneId = phone.Id }
                     );
 
                     // Try to restart
@@ -397,18 +390,17 @@ public class ContainerManager : IContainerManager
                 // Start container
                 await StartPhoneContainerAsync(phone);
                 
-                await _supabaseService.LogContainerEventAsync(
-                    phone.Id,
+                await _supabaseService.LogAgentEventAsync(
                     _currentHost.Id,
-                    ContainerEventType.Migrated,
-                    new { fromHostId = deadHostId, toHostId = _currentHost.Id }
+                    AgentEventType.Migrated,
+                    new { phoneId = phone.Id, fromHostId = deadHostId, toHostId = _currentHost.Id }
                 );
 
                 currentCount++;
             }
 
             // Mark dead host as inactive
-            await _supabaseService.SetHostStatusAsync(deadHostId, HostStatus.Inactive);
+            await _supabaseService.SetHostStatusAsync(deadHostId, "inactive");
         }
         catch (Exception ex)
         {

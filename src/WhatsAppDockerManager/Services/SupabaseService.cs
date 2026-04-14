@@ -1,28 +1,54 @@
-
 using WhatsAppDockerManager.Configuration;
 using WhatsAppDockerManager.Models;
 using System.Text.Json;
 using DbHost = WhatsAppDockerManager.Models.Host;
 namespace WhatsAppDockerManager.Services;
 using Supabase;
+
 public interface ISupabaseService
 {
+    // Host operations
     Task<DbHost?> GetOrCreateHostAsync(string hostName, string ipAddress, string? externalIp, int portRangeStart, int portRangeEnd, int maxContainers);
     Task UpdateHostHeartbeatAsync(Guid hostId);
-    Task<List<Phone>> GetPhonesForHostAsync(Guid hostId);
-    Task<List<Phone>> GetOrphanedPhonesAsync();
-    Task<Phone?> GetPhoneByIdAsync(Guid phoneId);
-    Task UpdatePhoneDockerStatusAsync(Guid phoneId, string status, string? containerId = null, string? containerName = null, int? apiPort = null, int? wsPort = null, string? dockerUrl = null, string? errorMessage = null);
-    Task AssignPhoneToHostAsync(Guid phoneId, Guid hostId);
-    Task LogContainerEventAsync(Guid? phoneId, Guid? hostId, string eventType, object? eventData = null);
     Task<List<DbHost>> GetActiveHostsAsync();
     Task<DbHost?> GetHostByIdAsync(Guid hostId);
     Task SetHostStatusAsync(Guid hostId, string status);
     Task<int> GetNextAvailablePortAsync(Guid hostId, int rangeStart, int rangeEnd);
 
-    Task<Phone?> GetPhoneByNumberAsync(string phoneNumber);   // חדש
-    Task<Phone>  CreatePhoneAsync(Phone phone);               // חדש
-    Task<List<Phone>> GetAllPhonesAsync();                    // 
+    // Phone operations
+    Task<List<Phone>> GetPhonesForHostAsync(Guid hostId);
+    Task<List<Phone>> GetOrphanedPhonesAsync();
+    Task<Phone?> GetPhoneByIdAsync(Guid phoneId);
+    Task<Phone?> GetPhoneByNumberAsync(string phoneNumber);
+    Task<Phone> CreatePhoneAsync(Phone phone);
+    Task<List<Phone>> GetAllPhonesAsync();
+    Task UpdatePhoneDockerStatusAsync(Guid phoneId, string status, string? containerId = null, string? containerName = null, int? apiPort = null, int? wsPort = null, string? dockerUrl = null, string? errorMessage = null);
+    Task UpdatePhoneNumberAsync(Guid phoneId, string phoneNumber);
+    Task AssignPhoneToHostAsync(Guid phoneId, Guid hostId);
+    Task LogAgentEventAsync(Guid? hostId, string eventType, object? eventData = null);
+
+    // Contact operations
+    Task<Contact?> GetContactByIdAsync(Guid contactId);
+    Task<Contact?> GetContactByNumberAsync(Guid phoneId, string contactNumber);
+    Task<List<Contact>> GetContactsForPhoneAsync(Guid phoneId);
+    Task<Contact> CreateContactAsync(Contact contact);
+    Task<Contact> UpdateContactAsync(Contact contact);
+    Task<Contact> GetOrCreateContactAsync(Guid phoneId, string contactNumber, string? name = null);
+    Task<Contact> UpsertContactAsync(Guid phoneId, string contactNumber, string? name = null, string? lid = null);
+
+    // Message operations
+    Task<Message?> GetMessageByIdAsync(Guid messageId);
+    Task<List<Message>> GetMessagesForContactAsync(Guid contactId, int limit = 100);
+    Task<List<Message>> GetMessagesForCallAsync(Guid callId, int limit = 100);
+    Task<Message> CreateMessageAsync(Message message);
+    Task<Message> AddMessageAsync(Guid phoneId, Guid contactId, string sender, object content, bool direction, string? leafId = null);
+
+    // Call operations
+    Task<Call?> GetCallByIdAsync(Guid callId);
+    Task<Call?> GetActiveCallForContactAsync(Guid phoneId, Guid contactId);
+    Task<Call> GetOrCreateActiveCallAsync(Guid phoneId, Guid contactId);
+    Task<Call> CreateCallAsync(Call call);
+    Task<Call> UpdateCallAsync(Call call);
 }
 
 public class SupabaseService : ISupabaseService
@@ -32,13 +58,12 @@ public class SupabaseService : ISupabaseService
 
     public SupabaseService(IConfiguration configuration, ILogger<SupabaseService> logger)
     {
-       var url = Environment.GetEnvironmentVariable("SUPABASE_URL") 
-    ?? throw new InvalidOperationException("SUPABASE_URL not set");
-var key = Environment.GetEnvironmentVariable("SUPABASE_KEY")
-    ?? throw new InvalidOperationException("SUPABASE_KEY not set");
+        var url = Environment.GetEnvironmentVariable("SUPABASE_URL") 
+            ?? throw new InvalidOperationException("SUPABASE_URL not set");
+        var key = Environment.GetEnvironmentVariable("SUPABASE_KEY")
+            ?? throw new InvalidOperationException("SUPABASE_KEY not set");
         _logger = logger;
-        
-        
+
         var options = new SupabaseOptions
         {
             AutoConnectRealtime = false
@@ -47,11 +72,12 @@ var key = Environment.GetEnvironmentVariable("SUPABASE_KEY")
         _client = new Client(url, key, options);
     }
 
+    #region Host Operations
+
     public async Task<DbHost?> GetOrCreateHostAsync(string hostName, string ipAddress, string? externalIp, int portRangeStart, int portRangeEnd, int maxContainers)
     {
         try
         {
-            // Try to find existing host
             var response = await _client.From<DbHost>()
                 .Where(h => h.HostName == hostName)
                 .Get();
@@ -60,11 +86,10 @@ var key = Environment.GetEnvironmentVariable("SUPABASE_KEY")
 
             if (existingHost != null)
             {
-                // Update existing host
                 existingHost.IpAddress = ipAddress;
                 existingHost.ExternalIp = externalIp;
                 existingHost.LastHeartbeat = DateTime.UtcNow;
-                existingHost.Status = HostStatus.Active;
+                existingHost.Status = "active";
                 existingHost.PortRangeStart = portRangeStart;
                 existingHost.PortRangeEnd = portRangeEnd;
                 existingHost.MaxContainers = maxContainers;
@@ -74,14 +99,13 @@ var key = Environment.GetEnvironmentVariable("SUPABASE_KEY")
                 return existingHost;
             }
 
-            // Create new host
             var newHost = new DbHost
             {
                 Id = Guid.NewGuid(),
                 HostName = hostName,
                 IpAddress = ipAddress,
                 ExternalIp = externalIp,
-                Status = HostStatus.Active,
+                Status = "active",
                 LastHeartbeat = DateTime.UtcNow,
                 MaxContainers = maxContainers,
                 PortRangeStart = portRangeStart,
@@ -118,140 +142,12 @@ var key = Environment.GetEnvironmentVariable("SUPABASE_KEY")
         }
     }
 
-    public async Task<List<Phone>> GetPhonesForHostAsync(Guid hostId)
-    {
-        try
-        {
-            var response = await _client.From<Phone>()
-                .Where(p => p.HostId == hostId)
-                .Where(p => p.Status == "active")
-                .Get();
-
-            return response.Models;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error getting phones for host {HostId}", hostId);
-            return new List<Phone>();
-        }
-    }
-
-    public async Task<List<Phone>> GetOrphanedPhonesAsync()
-    {
-        try
-        {
-            // Get phones that have no host assigned or are pending
-            var response = await _client.From<Phone>()
-                .Where(p => p.Status == "active")
-                .Where(p => p.DockerStatus == PhoneDockerStatus.Unknown || p.DockerStatus == PhoneDockerStatus.Pending)
-                .Get();
-
-            return response.Models.Where(p => p.HostId == null).ToList();
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error getting orphaned phones");
-            return new List<Phone>();
-        }
-    }
-
-    public async Task<Phone?> GetPhoneByIdAsync(Guid phoneId)
-    {
-        try
-        {
-            var response = await _client.From<Phone>()
-                .Where(p => p.Id == phoneId)
-                .Get();
-
-            return response.Models.FirstOrDefault();
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error getting phone {PhoneId}", phoneId);
-            return null;
-        }
-    }
-
-    public async Task UpdatePhoneDockerStatusAsync(Guid phoneId, string status, string? containerId = null, string? containerName = null, int? apiPort = null, int? wsPort = null, string? dockerUrl = null, string? errorMessage = null)
-    {
-        try
-        {
-            var phone = await GetPhoneByIdAsync(phoneId);
-            if (phone != null)
-            {
-                phone.DockerStatus = status;
-                phone.LastHealthCheck = DateTime.UtcNow;
-                
-                if (containerId != null) phone.ContainerId = containerId;
-                if (containerName != null) phone.ContainerName = containerName;
-                if (apiPort != null) phone.ApiPort = apiPort;
-                if (wsPort != null) phone.WsPort = wsPort;
-                if (dockerUrl != null) phone.DockerUrl = dockerUrl;
-                if (errorMessage != null) phone.ErrorMessage = errorMessage;
-                
-                // Clear error if status is running
-                if (status == PhoneDockerStatus.Running)
-                {
-                    phone.ErrorMessage = null;
-                }
-
-                await _client.From<Phone>().Update(phone);
-                _logger.LogDebug("Updated phone {PhoneId} docker status to {Status}", phoneId, status);
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error updating phone {PhoneId} docker status", phoneId);
-        }
-    }
-
-    public async Task AssignPhoneToHostAsync(Guid phoneId, Guid hostId)
-    {
-        try
-        {
-            var phone = await GetPhoneByIdAsync(phoneId);
-            if (phone != null)
-            {
-                phone.HostId = hostId;
-                phone.DockerStatus = PhoneDockerStatus.Pending;
-                await _client.From<Phone>().Update(phone);
-                _logger.LogInformation("Assigned phone {PhoneId} to host {HostId}", phoneId, hostId);
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error assigning phone {PhoneId} to host {HostId}", phoneId, hostId);
-        }
-    }
-
-    public async Task LogContainerEventAsync(Guid? phoneId, Guid? hostId, string eventType, object? eventData = null)
-    {
-        try
-        {
-            var evt = new ContainerEvent
-            {
-                Id = Guid.NewGuid(),
-                PhoneId = phoneId,
-                HostId = hostId,
-                EventType = eventType,
-                EventData = eventData != null ? JsonSerializer.Serialize(eventData) : null,
-                CreatedAt = DateTime.UtcNow
-            };
-
-            await _client.From<ContainerEvent>().Insert(evt);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error logging container event {EventType}", eventType);
-        }
-    }
-
     public async Task<List<DbHost>> GetActiveHostsAsync()
     {
         try
         {
             var response = await _client.From<DbHost>()
-                .Where(h => h.Status == HostStatus.Active)
+                .Where(h => h.Status == "active")
                 .Get();
 
             return response.Models;
@@ -324,52 +220,542 @@ var key = Environment.GetEnvironmentVariable("SUPABASE_KEY")
         }
     }
 
-     
-// ── Implementation additions ──────────────────────────────────────────────────
-public async Task<Phone?> GetPhoneByNumberAsync(string phoneNumber)
-{
-    try
+    #endregion
+
+    #region Phone Operations
+
+    public async Task<List<Phone>> GetPhonesForHostAsync(Guid hostId)
     {
-        var response = await _client.From<Phone>()
-            .Where(p => p.Number == phoneNumber)
-            .Get();
-        return response.Models.FirstOrDefault();
+        try
+        {
+            var response = await _client.From<Phone>()
+                .Where(p => p.HostId == hostId)
+                .Where(p => p.Status == "active")
+                .Get();
+
+            return response.Models;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error getting phones for host {HostId}", hostId);
+            return new List<Phone>();
+        }
     }
-    catch (Exception ex)
+
+    public async Task<List<Phone>> GetOrphanedPhonesAsync()
     {
-        _logger.LogError(ex, "Error getting phone by number {Number}", phoneNumber);
-        return null;
+        try
+        {
+            var response = await _client.From<Phone>()
+                .Where(p => p.Status == "active")
+                .Where(p => p.DockerStatus == PhoneDockerStatus.Unknown || p.DockerStatus == PhoneDockerStatus.Pending)
+                .Get();
+
+            return response.Models.Where(p => p.HostId == null).ToList();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error getting orphaned phones");
+            return new List<Phone>();
+        }
     }
-}
- 
-public async Task<Phone> CreatePhoneAsync(Phone phone)
-{
-    try
+
+    public async Task<Phone?> GetPhoneByIdAsync(Guid phoneId)
     {
-        var response = await _client.From<Phone>().Insert(phone);
-        return response.Models.First();
+        try
+        {
+            var response = await _client.From<Phone>()
+                .Where(p => p.Id == phoneId)
+                .Get();
+
+            return response.Models.FirstOrDefault();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error getting phone {PhoneId}", phoneId);
+            return null;
+        }
     }
-    catch (Exception ex)
+
+    public async Task<Phone?> GetPhoneByNumberAsync(string phoneNumber)
     {
-        _logger.LogError(ex, "Error creating phone {Number}", phone.Number);
-        throw;
+        try
+        {
+            var response = await _client.From<Phone>()
+                .Where(p => p.Number == phoneNumber)
+                .Get();
+            return response.Models.FirstOrDefault();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error getting phone by number {Number}", phoneNumber);
+            return null;
+        }
     }
-}
- 
-public async Task<List<Phone>> GetAllPhonesAsync()
-{
-    try
+
+    public async Task<Phone> CreatePhoneAsync(Phone phone)
     {
-        var response = await _client.From<Phone>()
-            .Where(p => p.Status == "active")
-            .Get();
-        return response.Models;
+        try
+        {
+            var response = await _client.From<Phone>().Insert(phone);
+            return response.Models.First();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error creating phone {Number}", phone.Number);
+            throw;
+        }
     }
-    catch (Exception ex)
+
+    public async Task<List<Phone>> GetAllPhonesAsync()
     {
-        _logger.LogError(ex, "Error getting all phones");
-        return new List<Phone>();
+        try
+        {
+            var response = await _client.From<Phone>()
+                .Where(p => p.Status == "active")
+                .Get();
+            return response.Models;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error getting all phones");
+            return new List<Phone>();
+        }
     }
-}
- 
+
+    public async Task UpdatePhoneDockerStatusAsync(Guid phoneId, string status, string? containerId = null, string? containerName = null, int? apiPort = null, int? wsPort = null, string? dockerUrl = null, string? errorMessage = null)
+    {
+        try
+        {
+            var phone = await GetPhoneByIdAsync(phoneId);
+            if (phone != null)
+            {
+                phone.DockerStatus = status;
+                phone.LastHealthCheck = DateTime.UtcNow;
+                
+                if (containerId != null) phone.ContainerId = containerId;
+                if (containerName != null) phone.ContainerName = containerName;
+                if (apiPort != null) phone.ApiPort = apiPort;
+                if (wsPort != null) phone.WsPort = wsPort;
+                if (dockerUrl != null) phone.DockerUrl = dockerUrl;
+                if (errorMessage != null) phone.ErrorMessage = errorMessage;
+                
+                if (status == PhoneDockerStatus.Running)
+                {
+                    phone.ErrorMessage = null;
+                }
+
+                await _client.From<Phone>().Update(phone);
+                _logger.LogDebug("Updated phone {PhoneId} docker status to {Status}", phoneId, status);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error updating phone {PhoneId} docker status", phoneId);
+        }
+    }
+
+    public async Task AssignPhoneToHostAsync(Guid phoneId, Guid hostId)
+    {
+        try
+        {
+            var phone = await GetPhoneByIdAsync(phoneId);
+            if (phone != null)
+            {
+                phone.HostId = hostId;
+                phone.DockerStatus = PhoneDockerStatus.Pending;
+                await _client.From<Phone>().Update(phone);
+                _logger.LogInformation("Assigned phone {PhoneId} to host {HostId}", phoneId, hostId);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error assigning phone {PhoneId} to host {HostId}", phoneId, hostId);
+        }
+    }
+
+    public async Task LogAgentEventAsync(Guid? hostId, string eventType, object? eventData = null)
+    {
+        try
+        {
+            var evt = new AgentEvent
+            {
+                Id = Guid.NewGuid(),
+                AgentHostId = hostId,
+                EventType = eventType,
+                EventData = eventData != null ? JsonSerializer.Serialize(eventData) : null,
+                CreatedAt = DateTime.UtcNow
+            };
+
+            await _client.From<AgentEvent>().Insert(evt);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error logging agent event {EventType}", eventType);
+        }
+    }
+
+    #endregion
+
+    #region Contact Operations
+
+    public async Task<Contact?> GetContactByIdAsync(Guid contactId)
+    {
+        try
+        {
+            var response = await _client.From<Contact>()
+                .Where(c => c.Id == contactId)
+                .Get();
+            return response.Models.FirstOrDefault();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error getting contact {ContactId}", contactId);
+            return null;
+        }
+    }
+
+    public async Task<Contact?> GetContactByNumberAsync(Guid phoneId, string contactNumber)
+    {
+        try
+        {
+            var response = await _client.From<Contact>()
+                .Where(c => c.PhoneId == phoneId)
+                .Where(c => c.Number == contactNumber)
+                .Get();
+            return response.Models.FirstOrDefault();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error getting contact by number {Number} for phone {PhoneId}", contactNumber, phoneId);
+            return null;
+        }
+    }
+
+    public async Task<List<Contact>> GetContactsForPhoneAsync(Guid phoneId)
+    {
+        try
+        {
+            var response = await _client.From<Contact>()
+                .Where(c => c.PhoneId == phoneId)
+                .Get();
+            return response.Models;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error getting contacts for phone {PhoneId}", phoneId);
+            return new List<Contact>();
+        }
+    }
+
+    public async Task<Contact> CreateContactAsync(Contact contact)
+    {
+        try
+        {
+            contact.Id = Guid.NewGuid();
+            var response = await _client.From<Contact>().Insert(contact);
+            _logger.LogInformation("Created contact {ContactId} for phone {PhoneId}", contact.Id, contact.PhoneId);
+            return response.Models.First();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error creating contact {Number}", contact.Number);
+            throw;
+        }
+    }
+
+    public async Task<Contact> UpdateContactAsync(Contact contact)
+    {
+        try
+        {
+            var response = await _client.From<Contact>().Update(contact);
+            return response.Models.First();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error updating contact {ContactId}", contact.Id);
+            throw;
+        }
+    }
+
+    public async Task<Contact> GetOrCreateContactAsync(Guid phoneId, string contactNumber, string? name = null)
+    {
+        var existing = await GetContactByNumberAsync(phoneId, contactNumber);
+        if (existing != null)
+        {
+            if (name != null && existing.Name != name)
+            {
+                existing.Name = name;
+                return await UpdateContactAsync(existing);
+            }
+            return existing;
+        }
+
+        return await CreateContactAsync(new Contact
+        {
+            PhoneId = phoneId,
+            Number = contactNumber,
+            Name = name
+        });
+    }
+
+    public async Task<Contact> UpsertContactAsync(Guid phoneId, string contactNumber, string? name = null, string? lid = null)
+    {
+        var existing = await GetContactByNumberAsync(phoneId, contactNumber);
+        
+        if (existing != null)
+        {
+            bool needsUpdate = false;
+            
+            if (!string.IsNullOrEmpty(name) && existing.Name != name)
+            {
+                existing.Name = name;
+                needsUpdate = true;
+            }
+            
+            if (!string.IsNullOrEmpty(lid) && existing.Lid != lid)
+            {
+                existing.Lid = lid;
+                needsUpdate = true;
+            }
+            
+            if (existing.IsConnect != true)
+            {
+                existing.IsConnect = true;
+                needsUpdate = true;
+            }
+            
+            if (needsUpdate)
+            {
+                _logger.LogDebug("Updating contact {ContactId} - Name: {Name}, Lid: {Lid}", 
+                    existing.Id, name, lid);
+                return await UpdateContactAsync(existing);
+            }
+            
+            return existing;
+        }
+
+        _logger.LogInformation("Creating new contact {Number} for phone {PhoneId}", contactNumber, phoneId);
+        return await CreateContactAsync(new Contact
+        {
+            PhoneId = phoneId,
+            Number = contactNumber,
+            Name = name,
+            Lid = lid,
+            IsConnect = true
+        });
+    }
+
+    #endregion
+
+    #region Phone Additional Operations
+
+    public async Task UpdatePhoneNumberAsync(Guid phoneId, string phoneNumber)
+    {
+        try
+        {
+            var phone = await GetPhoneByIdAsync(phoneId);
+            if (phone != null && phone.Number != phoneNumber)
+            {
+                phone.Number = phoneNumber;
+                await _client.From<Phone>().Update(phone);
+                _logger.LogInformation("Updated phone {PhoneId} number to {Number}", phoneId, phoneNumber);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error updating phone {PhoneId} number", phoneId);
+        }
+    }
+
+    #endregion
+
+    #region Message Operations
+
+    public async Task<Message?> GetMessageByIdAsync(Guid messageId)
+    {
+        try
+        {
+            var response = await _client.From<Message>()
+                .Where(m => m.Id == messageId)
+                .Get();
+            return response.Models.FirstOrDefault();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error getting message {MessageId}", messageId);
+            return null;
+        }
+    }
+
+    public async Task<List<Message>> GetMessagesForContactAsync(Guid contactId, int limit = 100)
+    {
+        try
+        {
+            var callResponse = await _client.From<Call>()
+                .Where(c => c.ContactId == contactId)
+                .Order(c => c.CreatedAt, Supabase.Postgrest.Constants.Ordering.Descending)
+                .Limit(1)
+                .Get();
+
+            var call = callResponse.Models.FirstOrDefault();
+            if (call == null)
+            {
+                return new List<Message>();
+            }
+
+            return await GetMessagesForCallAsync(call.Id, limit);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error getting messages for contact {ContactId}", contactId);
+            return new List<Message>();
+        }
+    }
+
+    public async Task<List<Message>> GetMessagesForCallAsync(Guid callId, int limit = 100)
+    {
+        try
+        {
+            var response = await _client.From<Message>()
+                .Where(m => m.CallId == callId)
+                .Order(m => m.SentAt, Supabase.Postgrest.Constants.Ordering.Descending)
+                .Limit(limit)
+                .Get();
+            return response.Models;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error getting messages for call {CallId}", callId);
+            return new List<Message>();
+        }
+    }
+
+    public async Task<Message> CreateMessageAsync(Message message)
+    {
+        try
+        {
+            message.Id = Guid.NewGuid();
+            if (message.SentAt == null)
+            {
+                message.SentAt = DateTime.UtcNow;
+            }
+            var response = await _client.From<Message>().Insert(message);
+            _logger.LogDebug("Created message {MessageId} for call {CallId}", message.Id, message.CallId);
+            return response.Models.First();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error creating message");
+            throw;
+        }
+    }
+
+    public async Task<Message> AddMessageAsync(Guid phoneId, Guid contactId, string sender, object content, bool direction, string? leafId = null)
+    {
+        var call = await GetOrCreateActiveCallAsync(phoneId, contactId);
+
+        var message = new Message
+        {
+            CallId = call.Id,
+            Sender = sender,
+            Content = JsonSerializer.Serialize(content),
+            Direction = direction,
+            LeafId = leafId,
+            Status = "sent",
+            RetryCounter = 0
+        };
+
+        return await CreateMessageAsync(message);
+    }
+
+    #endregion
+
+    #region Call Operations
+
+    public async Task<Call?> GetCallByIdAsync(Guid callId)
+    {
+        try
+        {
+            var response = await _client.From<Call>()
+                .Where(c => c.Id == callId)
+                .Get();
+            return response.Models.FirstOrDefault();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error getting call {CallId}", callId);
+            return null;
+        }
+    }
+
+    public async Task<Call?> GetActiveCallForContactAsync(Guid phoneId, Guid contactId)
+    {
+        try
+        {
+            var response = await _client.From<Call>()
+                .Where(c => c.PhoneId == phoneId)
+                .Where(c => c.ContactId == contactId)
+                .Where(c => c.Status == "active")
+                .Order(c => c.CreatedAt, Supabase.Postgrest.Constants.Ordering.Descending)
+                .Limit(1)
+                .Get();
+            return response.Models.FirstOrDefault();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error getting active call for contact {ContactId}", contactId);
+            return null;
+        }
+    }
+
+    public async Task<Call> GetOrCreateActiveCallAsync(Guid phoneId, Guid contactId)
+    {
+        var existing = await GetActiveCallForContactAsync(phoneId, contactId);
+        if (existing != null)
+        {
+            return existing;
+        }
+
+        return await CreateCallAsync(new Call
+        {
+            PhoneId = phoneId,
+            ContactId = contactId,
+            Status = "active",
+            StartedAt = DateTime.UtcNow
+        });
+    }
+
+    public async Task<Call> CreateCallAsync(Call call)
+    {
+        try
+        {
+            call.Id = Guid.NewGuid();
+            var response = await _client.From<Call>().Insert(call);
+            _logger.LogInformation("Created call {CallId} for phone {PhoneId} and contact {ContactId}", 
+                call.Id, call.PhoneId, call.ContactId);
+            return response.Models.First();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error creating call");
+            throw;
+        }
+    }
+
+    public async Task<Call> UpdateCallAsync(Call call)
+    {
+        try
+        {
+            var response = await _client.From<Call>().Update(call);
+            return response.Models.First();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error updating call {CallId}", call.Id);
+            throw;
+        }
+    }
+
+    #endregion
 }
