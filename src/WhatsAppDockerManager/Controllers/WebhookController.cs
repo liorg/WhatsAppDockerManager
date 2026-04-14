@@ -29,8 +29,8 @@ public class WebhookController : ControllerBase
     [HttpPost("container-event/{phoneId}")]
     public async Task<IActionResult> ContainerEvent(Guid phoneId, [FromBody] ContainerEventPayload payload)
     {
-        _logger.LogInformation("Container event for phone {PhoneId}: {Event}", phoneId, payload.Event);
-        _logger.LogInformation("Payload received: {@Payload}", payload);
+        _logger.LogInformation("Container event for phone {PhoneId}: {Event}", phoneId, payload.Event ?? "unknown");
+        _logger.LogDebug("Payload received: {@Payload}", payload);
 
         var phone = await _supabaseService.GetPhoneByIdAsync(phoneId);
         if (phone == null)
@@ -39,10 +39,7 @@ public class WebhookController : ControllerBase
         switch (payload.Event)
         {
             case "authenticated":
-                _logger.LogInformation("Phone {PhoneId} authenticated as {Phone}", phoneId, payload.Phone);
-                await _supabaseService.UpdatePhoneDockerStatusAsync(phoneId, PhoneDockerStatus.Running);
-                if (!string.IsNullOrEmpty(payload.Phone))
-                    await _supabaseService.UpdatePhoneNumberAsync(phoneId, payload.Phone);
+                await HandleAuthenticated(phoneId, phone, payload);
                 break;
 
             case "disconnected":
@@ -56,32 +53,60 @@ public class WebhookController : ControllerBase
                 break;
 
             case "message":
-             _logger.LogInformation("Phone {PhoneId} wmessage", phoneId);
+                _logger.LogInformation("Phone {PhoneId} received message", phoneId);
                 await HandleIncomingMessage(phoneId, phone, payload);
                 break;
-        }
 
-        //if (payload.Event != "message")
-       // {
-        //      await _supabaseService.LogAgentEventAsync(
-        //            _containerManager.CurrentHostId, 
-       //           payload.Event ?? "unknown",
-         //           new { phoneId = phone.Id, error = "Failed to create container" }
-        //        );
-        //    await _supabaseService.LogAgentEventAsync(phoneId, _containerManager.CurrentHostId, payload.Event ?? "unknown", payload);
-       // }
+            default:
+                _logger.LogWarning("Unknown event type: {Event}", payload.Event);
+                break;
+        }
 
         return Ok(new { received = true });
     }
 
+    /// <summary>
+    /// Handle authenticated event - save creds and update phone number
+    /// </summary>
+    private async Task HandleAuthenticated(Guid phoneId, Phone phone, ContainerEventPayload payload)
+    {
+        _logger.LogInformation("Phone {PhoneId} authenticated as {Phone}", phoneId, payload.Phone);
+        
+        // Update status to running
+        await _supabaseService.UpdatePhoneDockerStatusAsync(phoneId, PhoneDockerStatus.Running);
+        
+        // Update phone number if provided
+        if (!string.IsNullOrEmpty(payload.Phone))
+        {
+            var normalizedPhone = "+" + payload.Phone.Replace("+", "");
+            await _supabaseService.UpdatePhoneNumberAsync(phoneId, normalizedPhone);
+        }
+        
+        // Save creds_base64 if provided
+        if (!string.IsNullOrEmpty(payload.CredsB64))
+        {
+            await _supabaseService.UpdatePhoneCredsAsync(phoneId, payload.CredsB64);
+            _logger.LogInformation("Saved creds_base64 for phone {PhoneId} (length: {Length})", phoneId, payload.CredsB64.Length);
+        }
+    }
+
+    /// <summary>
+    /// Handle incoming message - create contact if not exists and save message
+    /// </summary>
     private async Task HandleIncomingMessage(Guid phoneId, Phone phone, ContainerEventPayload payload)
-    {  
-        _logger.LogInformation("HandleIncomingMessage ");//");
-        if (string.IsNullOrEmpty(payload.Jid)) return;
+    {
+        if (string.IsNullOrEmpty(payload.Jid)) 
+        {
+            _logger.LogWarning("Message received without JID for phone {PhoneId}", phoneId);
+            return;
+        }
 
         try
         {
+            // Extract contact number from JID
             var contactNumber = payload.Jid.Split('@')[0];
+            
+            // Extract contact info from payload
             string? contactName = null;
             string? contactLid = null;
 
@@ -93,33 +118,65 @@ public class WebhookController : ControllerBase
                     contactLid = lid?.ToString();
             }
 
-            var contact = await _supabaseService.UpsertContactAsync(phoneId, contactNumber, name: contactName, lid: contactLid);
+            // Upsert contact - create if not exists, update if exists
+            var contact = await _supabaseService.UpsertContactAsync(
+                phoneId, 
+                contactNumber, 
+                name: contactName, 
+                lid: contactLid
+            );
+            _logger.LogInformation("Contact upserted: {ContactId} ({Number})", contact.Id, contactNumber);
 
+            // Determine message direction
             bool isIncoming = true;
-            if (payload.Data?.TryGetValue("fromMe", out var fromMe) == true)
-                isIncoming = !Convert.ToBoolean(fromMe);
+           if (payload.Data?.TryGetValue("fromMe", out var fromMe) == true)
+                {
+                    if (fromMe is System.Text.Json.JsonElement jsonElement)
+                        isIncoming = !jsonElement.GetBoolean();
+                    else
+                        isIncoming = !Convert.ToBoolean(fromMe);
+                }
 
-            var messageContent = new Dictionary<string, object>();
+            // Build message content
+            var messageContent = new Dictionary<string, object?>();
             if (payload.Data != null)
             {
-                if (payload.Data.TryGetValue("text", out var text)) messageContent["text"] = text;
-                if (payload.Data.TryGetValue("type", out var type)) messageContent["type"] = type;
-                if (payload.Data.TryGetValue("buttonId", out var buttonId)) messageContent["buttonId"] = buttonId;
-                if (payload.Data.TryGetValue("selectedId", out var selectedId)) messageContent["selectedId"] = selectedId;
+                if (payload.Data.TryGetValue("text", out var text)) 
+                    messageContent["text"] = text;
+                if (payload.Data.TryGetValue("type", out var type)) 
+                    messageContent["type"] = type;
+                if (payload.Data.TryGetValue("buttonId", out var buttonId)) 
+                    messageContent["buttonId"] = buttonId;
+                if (payload.Data.TryGetValue("selectedId", out var selectedId)) 
+                    messageContent["selectedId"] = selectedId;
+                if (payload.Data.TryGetValue("caption", out var caption)) 
+                    messageContent["caption"] = caption;
             }
 
-            if (messageContent.Count == 0 && !string.IsNullOrEmpty(payload.Type))
+            // Add type from payload if not in data
+            if (!messageContent.ContainsKey("type") && !string.IsNullOrEmpty(payload.Type))
                 messageContent["type"] = payload.Type;
 
+            // Determine sender
             var sender = isIncoming ? contactNumber : phone.Number;
 
-            await _supabaseService.AddMessageAsync(phoneId, contact.Id, sender, messageContent, direction: isIncoming, leafId: payload.MessageId);
+            // Save message
+            var message = await _supabaseService.AddMessageAsync(
+            phoneId, 
+            contact.Id, 
+            sender, 
+            messageContent, 
+            direction: isIncoming, 
+            leafId: null,
+            whatsappMessageId: payload.MessageId
+        );
 
-            _logger.LogInformation("Saved message from {Sender} for phone {PhoneId}", sender, phoneId);
+            _logger.LogInformation("Saved message {MessageId} from {Sender} for phone {PhoneId}", 
+                message.Id, sender, phoneId);
         }
         catch (Exception ex)
         {
-            _logger.LogInformation(ex, "Error handling message for phone {PhoneId}", phoneId);
+            _logger.LogError(ex, "Error handling message for phone {PhoneId}", phoneId);
         }
     }
 }

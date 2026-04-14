@@ -35,4 +35,7 @@ public class Message : BaseModel
 
     [Column("tool_tip")]
     public string? ToolTip { get; set; }
+
+    [Column("whatsapp_message_id")]
+public string? WhatsappMessageId { get; set; }
 }

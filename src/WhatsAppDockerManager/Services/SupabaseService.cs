@@ -41,7 +41,7 @@ public interface ISupabaseService
     Task<List<Message>> GetMessagesForContactAsync(Guid contactId, int limit = 100);
     Task<List<Message>> GetMessagesForCallAsync(Guid callId, int limit = 100);
     Task<Message> CreateMessageAsync(Message message);
-    Task<Message> AddMessageAsync(Guid phoneId, Guid contactId, string sender, object content, bool direction, string? leafId = null);
+    //Task<Message> AddMessageAsync(Guid phoneId, Guid contactId, string sender, object content, bool direction, string? leafId = null);
 
     // Call operations
     Task<Call?> GetCallByIdAsync(Guid callId);
@@ -49,6 +49,11 @@ public interface ISupabaseService
     Task<Call> GetOrCreateActiveCallAsync(Guid phoneId, Guid contactId);
     Task<Call> CreateCallAsync(Call call);
     Task<Call> UpdateCallAsync(Call call);
+
+    Task UpdatePhoneCredsAsync(Guid phoneId, string credsBase64);
+
+    Task<Message> AddMessageAsync(Guid phoneId, Guid contactId, string sender, object content, bool direction,
+     string? leafId = null, string? whatsappMessageId = null);
 }
 
 public class SupabaseService : ISupabaseService
@@ -650,8 +655,8 @@ public class SupabaseService : ISupabaseService
             throw;
         }
     }
-
-    public async Task<Message> AddMessageAsync(Guid phoneId, Guid contactId, string sender, object content, bool direction, string? leafId = null)
+    public async Task<Message> AddMessageAsync(Guid phoneId, Guid contactId, string sender, object content,
+    bool direction, string? leafId = null, string? whatsappMessageId = null)
     {
         var call = await GetOrCreateActiveCallAsync(phoneId, contactId);
 
@@ -659,9 +664,13 @@ public class SupabaseService : ISupabaseService
         {
             CallId = call.Id,
             Sender = sender,
-            Content = JsonSerializer.Serialize(content),
+            Content = JsonSerializer.Serialize(content, new JsonSerializerOptions 
+            { 
+                Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping 
+            }),
             Direction = direction,
             LeafId = leafId,
+            WhatsappMessageId = whatsappMessageId,
             Status = "sent",
             RetryCounter = 0
         };
@@ -756,6 +765,28 @@ public class SupabaseService : ISupabaseService
             throw;
         }
     }
+    /// <summary>
+/// Update phone creds_base64 after authentication
+/// </summary>
+public async Task UpdatePhoneCredsAsync(Guid phoneId, string credsBase64)
+{
+    try
+    {
+        var phone = await GetPhoneByIdAsync(phoneId);
+        if (phone != null)
+        {
+          //  phone.CredsBase64 = credsBase64;
+              phone.CredsBase64 = credsBase64;  // הסר את ה-//
+            await _client.From<Phone>().Update(phone);
+            _logger.LogInformation("Updated phone {PhoneId} creds_base64 (length: {Length})", phoneId, credsBase64.Length);
+        }
+    }
+    catch (Exception ex)
+    {
+        _logger.LogError(ex, "Error updating phone {PhoneId} creds", phoneId);
+    }
+}
+ 
 
     #endregion
 }
