@@ -176,10 +176,20 @@ public class SendController : ControllerBase
             var response = await client.PostAsJsonAsync($"{phone.DockerUrl}{endpoint}", request);
             var responseContent = await response.Content.ReadAsStringAsync();
 
-            if (response.IsSuccessStatusCode)
+          if (response.IsSuccessStatusCode)
             {
-                await LogOutgoingMessage(phoneId, phone, jid, messageContent);
-                _logger.LogInformation("Sent message to {Jid} via phone {PhoneId}", jid, phoneId);
+                // Extract messageId from response
+                string? whatsappMessageId = null;
+                try
+                {
+                    var jsonResponse = JsonSerializer.Deserialize<JsonElement>(responseContent);
+                    if (jsonResponse.TryGetProperty("messageId", out var msgIdElement))
+                        whatsappMessageId = msgIdElement.GetString();
+                }
+                catch { }
+
+                await LogOutgoingMessage(phoneId, phone, jid, messageContent, whatsappMessageId);
+                _logger.LogInformation("Sent message to {Jid} via phone {PhoneId}, messageId: {MessageId}", jid, phoneId, whatsappMessageId);
             }
             else
             {
@@ -195,21 +205,22 @@ public class SendController : ControllerBase
         }
     }
 
-    private async Task LogOutgoingMessage(Guid phoneId, Phone phone, string jid, object content)
+   private async Task LogOutgoingMessage(Guid phoneId, Phone phone, string jid, object content, string? whatsappMessageId)
     {
         try
         {
             var contactNumber = jid.Split('@')[0];
             var contact = await _supabaseService.UpsertContactAsync(phoneId, contactNumber);
             
-            await _supabaseService.AddMessageAsync(
-                phoneId,
-                contact.Id,
-                phone.Number,
-                content,
-                direction: false,
-                leafId: null
-            );
+           await _supabaseService.AddMessageAsync(
+                    phoneId,
+                    contact.Id,
+                    phone.Number,
+                    content,
+                    direction: false,
+                    leafId: null,
+                    whatsappMessageId: whatsappMessageId
+                );
         }
         catch (Exception ex)
         {
