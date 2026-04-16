@@ -1,6 +1,17 @@
 docker exec whatsapp_972504476645 curl http://172.17.0.1:5000/api/host/health
 
 
+
+
+docker ps | grep redis
+
+
+docker inspect whatsapp_972504476645 | grep -A 20 "Networks"
+
+
+docker inspect yliorgr/whatsapp-single | grep -i created
+
+
 # 4. הפעל מחדש את ה-Agent
 dotnet run
 

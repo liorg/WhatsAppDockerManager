@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using System.Text.Json.Serialization;
 using WhatsAppDockerManager.Models;
 using WhatsAppDockerManager.Services;
 
@@ -82,11 +83,16 @@ public class WebhookController : ControllerBase
             await _supabaseService.UpdatePhoneNumberAsync(phoneId, normalizedPhone);
         }
         
-        // Save creds_base64 if provided
+        // ── שמור creds_base64 ← הכי חשוב! ──────────────────────
         if (!string.IsNullOrEmpty(payload.CredsB64))
         {
             await _supabaseService.UpdatePhoneCredsAsync(phoneId, payload.CredsB64);
-            _logger.LogInformation("Saved creds_base64 for phone {PhoneId} (length: {Length})", phoneId, payload.CredsB64.Length);
+            _logger.LogInformation("Saved creds_base64 for phone {PhoneId} (length: {Length})", 
+                phoneId, payload.CredsB64.Length);
+        }
+        else
+        {
+            _logger.LogWarning("authenticated event received but creds_b64 is empty for phone {PhoneId}", phoneId);
         }
     }
 
@@ -103,10 +109,8 @@ public class WebhookController : ControllerBase
 
         try
         {
-            // Extract contact number from JID
             var contactNumber = payload.Jid.Split('@')[0];
             
-            // Extract contact info from payload
             string? contactName = null;
             string? contactLid = null;
 
@@ -117,10 +121,7 @@ public class WebhookController : ControllerBase
                 if (payload.Data.TryGetValue("lid", out var lid))
                     contactLid = lid?.ToString();
             }
-            // נסה למצוא ולקשר PingSender לפי LID
 
-
-            // Upsert contact - create if not exists, update if exists
             var contact = await _supabaseService.UpsertContactAsync(
                 phoneId, 
                 contactNumber, 
@@ -128,21 +129,21 @@ public class WebhookController : ControllerBase
                 lid: contactLid
             );
             _logger.LogInformation("Contact upserted: {ContactId} ({Number})", contact.Id, contactNumber);
-           if (!string.IsNullOrEmpty(contactLid))
+
+            if (!string.IsNullOrEmpty(contactLid))
             {
                 await _supabaseService.MatchPingSenderByLidAsync(phoneId, contactLid, contact.Id);
             }
-            // Determine message direction
-            bool isIncoming = true;
-           if (payload.Data?.TryGetValue("fromMe", out var fromMe) == true)
-                {
-                    if (fromMe is System.Text.Json.JsonElement jsonElement)
-                        isIncoming = !jsonElement.GetBoolean();
-                    else
-                        isIncoming = !Convert.ToBoolean(fromMe);
-                }
 
-            // Build message content
+            bool isIncoming = true;
+            if (payload.Data?.TryGetValue("fromMe", out var fromMe) == true)
+            {
+                if (fromMe is System.Text.Json.JsonElement jsonElement)
+                    isIncoming = !jsonElement.GetBoolean();
+                else
+                    isIncoming = !Convert.ToBoolean(fromMe);
+            }
+
             var messageContent = new Dictionary<string, object?>();
             if (payload.Data != null)
             {
@@ -158,23 +159,20 @@ public class WebhookController : ControllerBase
                     messageContent["caption"] = caption;
             }
 
-            // Add type from payload if not in data
             if (!messageContent.ContainsKey("type") && !string.IsNullOrEmpty(payload.Type))
                 messageContent["type"] = payload.Type;
 
-            // Determine sender
             var sender = isIncoming ? contactNumber : phone.Number;
 
-            // Save message
             var message = await _supabaseService.AddMessageAsync(
-            phoneId, 
-            contact.Id, 
-            sender, 
-            messageContent, 
-            direction: isIncoming, 
-            leafId: null,
-            whatsappMessageId: payload.MessageId
-        );
+                phoneId, 
+                contact.Id, 
+                sender, 
+                messageContent, 
+                direction: isIncoming, 
+                leafId: null,
+                whatsappMessageId: payload.MessageId
+            );
 
             _logger.LogInformation("Saved message {MessageId} from {Sender} for phone {PhoneId}", 
                 message.Id, sender, phoneId);
@@ -186,16 +184,34 @@ public class WebhookController : ControllerBase
     }
 }
 
-// Webhook DTOs
+// ── Webhook DTOs ──────────────────────────────────────────────────────────────
 public class ContainerEventPayload
 {
+    [JsonPropertyName("event")]
     public string? Event { get; set; }
+
+    [JsonPropertyName("messageId")]
     public string? MessageId { get; set; }
+
+    [JsonPropertyName("jid")]
     public string? Jid { get; set; }
+
+    [JsonPropertyName("type")]
     public string? Type { get; set; }
+
+    [JsonPropertyName("data")]
     public Dictionary<string, object>? Data { get; set; }
-    public long? Timestamp { get; set; }
+
+    // ← שנה מ-long? ל-object?
+    [JsonPropertyName("timestamp")]
+    public object? Timestamp { get; set; }
+
+    [JsonPropertyName("phone")]
     public string? Phone { get; set; }
+
+    [JsonPropertyName("name")]
     public string? Name { get; set; }
+
+    [JsonPropertyName("creds_b64")]
     public string? CredsB64 { get; set; }
 }

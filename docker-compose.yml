@@ -1,6 +1,15 @@
 version: '3.8'
-
 services:
+
+  redis:
+    image: redis:alpine
+    container_name: redis_shared
+    volumes:
+      - ./data/redis:/data
+    networks:
+      - whatsapp-network
+    restart: unless-stopped
+
   whatsapp-manager:
     build:
       context: .
@@ -8,12 +17,12 @@ services:
     container_name: whatsapp-manager
     restart: unless-stopped
     ports:
-      - "8000-8999:8000-8999"          # API & HTTP Proxy
-      - "9000-9999:9000-9999"  # TCP Proxy ports (WebSocket)
+      - "8000-8999:8000-8999"
+      - "9000-9999:9000-9999"
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock  # Docker socket for managing containers
-      - ./whatsapp-data:/opt/whatsapp-data          # Shared data directory
-      - ./logs:/app/logs                            # Logs
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./whatsapp-data:/opt/whatsapp-data
+      - ./logs:/app/logs
     environment:
       - AppSettings__Supabase__Url=${SUPABASE_URL}
       - AppSettings__Supabase__Key=${SUPABASE_KEY}
@@ -22,6 +31,8 @@ services:
       - AppSettings__Host__ExternalIp=${EXTERNAL_IP:-}
       - AppSettings__Docker__DataBasePath=/opt/whatsapp-data
       - TZ=Asia/Jerusalem
+    depends_on:
+      - redis
     networks:
       - whatsapp-network
     healthcheck:
@@ -33,4 +44,5 @@ services:
 
 networks:
   whatsapp-network:
+    name: whatsapp_network
     driver: bridge

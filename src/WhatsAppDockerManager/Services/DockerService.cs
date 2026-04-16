@@ -25,6 +25,9 @@ public class DockerService : IDockerService, IDisposable
     private readonly HostSettings _hostSettings;
     private readonly IConfiguration _configuration;
 
+    private const string RedisContainerName = "redis_shared";
+    private const string NetworkName        = "whatsapp_network";
+
     public DockerService(IConfiguration configuration, ILogger<DockerService> logger)
     {
         _logger         = logger;
@@ -91,22 +94,20 @@ public class DockerService : IDockerService, IDisposable
                 "Phone {Phone} → FastAPI:{FastApi} Baileys:{Baileys}",
                 phone.Number, fastApiPort, baileysPort);
 
-            // Data paths
+            // ── Data paths (ללא redis — Redis רץ בcontainer נפרד) ──
             var basePath     = _dockerSettings.DataBasePath;
             var authPath     = Path.Combine(basePath, $"auth_{phoneIndex}");
-            var redisPath    = Path.Combine(basePath, $"redis_{phoneIndex}");
             var logsPath     = Path.Combine(basePath, $"logs_{phoneIndex}");
             var contactsPath = Path.Combine(basePath, $"contacts_{phoneIndex}");
 
             if (!OperatingSystem.IsWindows())
             {
                 Directory.CreateDirectory(authPath);
-                Directory.CreateDirectory(redisPath);
                 Directory.CreateDirectory(logsPath);
                 Directory.CreateDirectory(contactsPath);
             }
 
-            // בדוק אם קונטיינר קיים ומחק
+            // ── בדוק אם קונטיינר קיים ומחק ──────────────────────
             var existingContainers = await _client.Containers
                 .ListContainersAsync(new ContainersListParameters { All = true });
             var existing = existingContainers.FirstOrDefault(c =>
@@ -127,8 +128,8 @@ public class DockerService : IDockerService, IDisposable
                         $"TZ={_dockerSettings.Timezone}",
                         $"PHONE_NUMBER={phone.Number}",
                         $"PHONE_ID={phone.Id}",
+                        $"REDIS_URL=redis://{RedisContainerName}:6379",  // ← Redis חיצוני
                     },
-                    // הקונטיינר מאזין תמיד על 8000 (FastAPI) ו-3001 (Baileys)
                     ExposedPorts = new Dictionary<string, EmptyStruct>
                     {
                         { "8000/tcp", default },
@@ -150,9 +151,9 @@ public class DockerService : IDockerService, IDisposable
                         Binds = new List<string>
                         {
                             $"{authPath}:/app/auth_info",
-                            $"{redisPath}:/var/lib/redis",
                             $"{logsPath}:/var/log",
                             $"{contactsPath}:/app/data"
+                            // ← הוסר: redisPath:/var/lib/redis
                         },
                         RestartPolicy = new RestartPolicy { Name = RestartPolicyKind.UnlessStopped },
                         Memory    = 512 * 1024 * 1024,
@@ -177,9 +178,14 @@ public class DockerService : IDockerService, IDisposable
                 return null;
             }
 
+            // ── חבר ל-network כדי לדבר עם redis_shared ───────────
+            await _client.Networks.ConnectNetworkAsync(
+                NetworkName,
+                new NetworkConnectParameters { Container = createResponse.ID });
+
             _logger.LogInformation(
-                "Container {Name} started. FastAPI:{FastApi} Baileys:{Baileys}",
-                containerName, fastApiPort, baileysPort);
+                "Container {Name} started and connected to {Network}. FastAPI:{FastApi} Baileys:{Baileys}",
+                containerName, NetworkName, fastApiPort, baileysPort);
 
             return createResponse.ID;
         }

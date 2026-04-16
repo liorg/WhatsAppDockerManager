@@ -19,121 +19,47 @@
 ## ארכיטקטורה
 
 
-
-
-┌─────────────────────────────────────────────────────────────────┐
-│                    .NET Core Agent (Port 5000)                   │
-│                                                                  │
-│  ┌─────────────────┐    ┌─────────────────────────────────────┐ │
-│  │ ContainerManager│───▶│ RegisterWebhookInContainerAsync()  │ │
-│  │   (on startup)  │    │ רושם את עצמו כ-webhook בכל קונטיינר│ │
-│  └─────────────────┘    └─────────────────────────────────────┘ │
-│                                                                  │
-│  ┌─────────────────────────────────────────────────────────────┐│
-│  │ POST /api/webhook/container-event/{phoneId}                 ││
-│  │  • authenticated → עדכון סטטוס + מספר טלפון                  ││
-│  │  • message → UpsertContact + AddMessage                     ││
-│  │  • disconnected → עדכון סטטוס שגיאה                          ││
-│  └─────────────────────────────────────────────────────────────┘│
-└─────────────────────────────────────────────────────────────────┘
-                              ▲
-                              │ webhook (פנימי)
-                              │
-┌─────────────────────────────┴───────────────────────────────────┐
-│              Docker Container (FastAPI - Port 8001+)             │
-│                                                                  │
-│  כל הודעה נכנסת → שולח POST ל-Agent                              │
-│  /internal/baileys-event                                         │
-└─────────────────────────────────────────────────────────────────┘
 ```
 ## LAYERS
 
+flowchart TB
+    FE["Frontend (React)<br/><br/>GET /api/routes<br/>GET /wa/{phone}/qrcode/image<br/>POST /wa/{phone}/send/text"]
 
-┌─────────────────────────────────────────────────────────────────────┐
-│                           Frontend (React)                          │
-│                                                                     │
-│   GET /api/routes  →  קבל רשימת טלפונים פעילים                     │
-│   GET /wa/972501234567/qrcode/image  →  הצג QR                     │
-│   POST /wa/972501234567/send/text  →  שלח הודעה                    │
-└────────────────────────────────┬────────────────────────────────────┘
-                                 │
-                                 ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                    WhatsApp Docker Manager (.NET)                   │
-│                                                                     │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────────┐  │
-│  │  YARP Proxy  │  │  Container   │  │  Background Services     │  │
-│  │              │  │  Manager     │  │  - Heartbeat (30s)       │  │
-│  │ /wa/{phone}/ │  │              │  │  - Health Check (60s)    │  │
-│  │     ↓        │  │  - Create    │  │  - Sync (5min)           │  │
-│  │ Container    │  │  - Start     │  │  - Route Sync            │  │
-│  │              │  │  - Stop      │  │                          │  │
-│  └──────────────┘  └──────────────┘  └──────────────────────────┘  │
-│                                                                     │
-│  ┌──────────────────────────────────────────────────────────────┐  │
-│  │                     Webhook Receiver                          │  │
-│  │  POST /api/webhook/container-event/{phoneId}                  │  │
-│  │  ← קבלת events מה-containers (messages, auth, disconnect)    │  │
-│  └──────────────────────────────────────────────────────────────┘  │
-└────────────────────────────────┬────────────────────────────────────┘
-                                 │
-          ┌──────────────────────┼──────────────────────┐
-          │                      │                      │
-          ▼                      ▼                      ▼
-┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐
-│   Container 1   │  │   Container 2   │  │   Container 3   │
-│   :8001/:9001   │  │   :8002/:9002   │  │   :8003/:9003   │
-│                 │  │                 │  │                 │
-│  WhatsApp API   │  │  WhatsApp API   │  │  WhatsApp API   │
-│  (FastAPI)      │  │  (FastAPI)      │  │  (FastAPI)      │
-└─────────────────┘  └─────────────────┘  └─────────────────┘flowchart TD
+    subgraph MANAGER["WhatsApp Docker Manager (.NET)"]
+        direction TB
 
-    subgraph FRONTEND ["Frontend (React)"]
-        F1["GET /api/routes\nקבל רשימת טלפונים פעילים"]
-        F2["GET /wa/{phone}/qrcode/image\nהצג QR"]
-        F3["POST /wa/{phone}/send/text\nשלח הודעה"]
+        YARP["YARP Proxy<br/>/wa/{phone}/ → Container"]
+        CM["Container Manager<br/>Create / Start / Stop"]
+        BG["Background Services<br/>Heartbeat / Health Check / Sync / Route Sync"]
+        WEBHOOK["Webhook Receiver<br/>POST /api/webhook/container-event/{phoneId}"]
     end
 
-    subgraph AGENT ["WhatsApp Docker Manager (.NET)"]
-        
-        subgraph YARP ["YARP Proxy"]
-            Y1["/wa/{phone}/\n→ Container"]
-        end
-
-        subgraph CM ["Container Manager"]
-            C1["Create"]
-            C2["Start"]
-            C3["Stop"]
-        end
-
-        subgraph BG ["Background Services"]
-            B1["Heartbeat (30s)"]
-            B2["Health Check (60s)"]
-            B3["Sync (5min)"]
-            B4["Route Sync"]
-        end
-
-        subgraph WEBHOOK ["Webhook Receiver"]
-            W1["POST /api/webhook/container-event/{phoneId}\nmessages / auth / disconnect"]
-        end
+    subgraph CONTAINERS["Docker Containers"]
+        C1["Container 1<br/>:8001/:9001<br/>FastAPI"]
+        C2["Container 2<br/>:8002/:9002<br/>FastAPI"]
+        C3["Container 3<br/>:8003/:9003<br/>FastAPI"]
     end
 
-    subgraph CONTAINERS ["Docker Containers"]
-        D1["Container 1\n:8001 / :9001\nFastAPI"]
-        D2["Container 2\n:8002 / :9002\nFastAPI"]
-        D3["Container 3\n:8003 / :9003\nFastAPI"]
-    end
+    %% Frontend → Manager
+    FE -->|API Calls| YARP
+    FE -->|Manage Containers| CM
 
-    FRONTEND --> AGENT
-    YARP --> D1
-    YARP --> D2
-    YARP --> D3
+    %% Manager → Containers
+    YARP --> C1
+    YARP --> C2
+    YARP --> C3
 
-    D1 -->|webhook| WEBHOOK
-    D2 -->|webhook| WEBHOOK
-    D3 -->|webhook| WEBHOOK
+    %% Containers → Manager (Webhook)
+    C1 -->|events| WEBHOOK
+    C2 -->|events| WEBHOOK
+    C3 -->|events| WEBHOOK
 
-    
+    %% Background influence
+    BG -.-> CM
+    BG -.-> YARP
+
+
+
 ┌─────────────────────────────────────────────────────────────────────┐
 │                           Frontend (React)                          │
 │                                                                     │
@@ -172,6 +98,20 @@
 │  WhatsApp API   │  │  WhatsApp API   │  │  WhatsApp API   │
 │  (FastAPI)      │  │  (FastAPI)      │  │  (FastAPI)      │
 └─────────────────┘  └─────────────────┘  └─────────────────┘
+
+
+
+  # 1. צור network
+docker network create whatsapp_network
+
+# 2. הפעל Redis
+docker run -d \
+  --name redis_shared \
+  --network whatsapp_network \
+  -v $(pwd)/data/redis:/data \
+  --restart unless-stopped \
+  redis:alpine
+
 ```
 
 ## Frontend Integration
