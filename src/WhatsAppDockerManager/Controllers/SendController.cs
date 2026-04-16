@@ -158,7 +158,61 @@ public class SendController : ControllerBase
             return StatusCode(503, new { error = "Container unavailable" });
         }
     }
+/// <summary>
+/// Send PING message to identify contact LID
+/// </summary>
+[HttpPost("ping")]
+public async Task<IActionResult> SendPing(Guid phoneId, [FromBody] SendPingRequest request)
+{
+    var phone = await _supabaseService.GetPhoneByIdAsync(phoneId);
+    if (phone == null)
+        return NotFound(new { error = "Phone not found" });
 
+    if (string.IsNullOrEmpty(phone.DockerUrl))
+        return BadRequest(new { error = "Container not running" });
+
+    try
+    {
+        var client = _httpClientFactory.CreateClient();
+        client.Timeout = TimeSpan.FromSeconds(30);
+
+        var pingText = request.Text ?? "🔔";
+        var sendRequest = new { jid = request.Jid, text = pingText };
+        
+        var response = await client.PostAsJsonAsync($"{phone.DockerUrl}/send/text", sendRequest);
+        var responseContent = await response.Content.ReadAsStringAsync();
+
+        if (response.IsSuccessStatusCode)
+        {
+            string? whatsappMessageId = null;
+            try
+            {
+                var jsonResponse = JsonSerializer.Deserialize<JsonElement>(responseContent);
+                if (jsonResponse.TryGetProperty("messageId", out var msgIdElement))
+                    whatsappMessageId = msgIdElement.GetString();
+            }
+            catch { }
+
+            var targetNumber = request.Jid.Split('@')[0];
+            var pingSender = await _supabaseService.CreatePingSenderAsync(phoneId, targetNumber, whatsappMessageId);
+
+            _logger.LogInformation("Sent PING to {Jid}, PingSender: {PingSenderId}", request.Jid, pingSender.Id);
+
+            return Ok(new { 
+                success = true, 
+                pingSenderId = pingSender.Id,
+                messageId = whatsappMessageId 
+            });
+        }
+
+        return StatusCode((int)response.StatusCode, JsonSerializer.Deserialize<object>(responseContent));
+    }
+    catch (Exception ex)
+    {
+        _logger.LogError(ex, "Error sending PING for phone {PhoneId}", phoneId);
+        return StatusCode(503, new { error = "Container unavailable", details = ex.Message });
+    }
+}
     private async Task<IActionResult> ForwardToContainer(Guid phoneId, string endpoint, object request, string jid, object messageContent)
     {
         var phone = await _supabaseService.GetPhoneByIdAsync(phoneId);
@@ -285,4 +339,9 @@ public class SendListResponseRequest
     public string Jid { get; set; } = string.Empty;
     public string RowId { get; set; } = string.Empty;
     public string? Title { get; set; }
+}
+public class SendPingRequest
+{
+    public string Jid { get; set; } = string.Empty;
+    public string? Text { get; set; }
 }

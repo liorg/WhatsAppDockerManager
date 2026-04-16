@@ -54,6 +54,11 @@ public interface ISupabaseService
 
     Task<Message> AddMessageAsync(Guid phoneId, Guid contactId, string sender, object content, bool direction,
      string? leafId = null, string? whatsappMessageId = null);
+
+     // PingSender operations
+    Task<PingSender> CreatePingSenderAsync(Guid phoneId, string targetNumber, string? pingMessageId);
+    Task<PingSender?> GetPendingPingSenderAsync(Guid phoneId, string targetNumber);
+    Task<PingSender?> MatchPingSenderByLidAsync(Guid phoneId, string lid, Guid contactId);
 }
 
 public class SupabaseService : ISupabaseService
@@ -789,4 +794,73 @@ public async Task UpdatePhoneCredsAsync(Guid phoneId, string credsBase64)
  
 
     #endregion
+
+    #region PingSender Operations
+
+public async Task<PingSender> CreatePingSenderAsync(Guid phoneId, string targetNumber, string? pingMessageId)
+{
+    var pingSender = new PingSender
+    {
+        Id = Guid.NewGuid(),
+        PhoneId = phoneId,
+        TargetNumber = targetNumber,
+        PingMessageId = pingMessageId,
+        Status = "pending",
+        CreatedAt = DateTime.UtcNow
+    };
+
+    var response = await _client.From<PingSender>().Insert(pingSender);
+    _logger.LogInformation("Created PingSender {Id} for {TargetNumber}", pingSender.Id, targetNumber);
+    return response.Models.First();
+}
+
+public async Task<PingSender?> GetPendingPingSenderAsync(Guid phoneId, string targetNumber)
+{
+    try
+    {
+        var response = await _client.From<PingSender>()
+            .Where(p => p.PhoneId == phoneId)
+            .Where(p => p.TargetNumber == targetNumber)
+            .Where(p => p.Status == "pending")
+            .Order(p => p.CreatedAt, Supabase.Postgrest.Constants.Ordering.Descending)
+            .Limit(1)
+            .Get();
+        return response.Models.FirstOrDefault();
+    }
+    catch (Exception ex)
+    {
+        _logger.LogError(ex, "Error getting pending PingSender");
+        return null;
+    }
+}
+
+public async Task<PingSender?> MatchPingSenderByLidAsync(Guid phoneId, string lid, Guid contactId)
+{
+    try
+    {
+        // מצא ping pending לפי מספר הטלפון של ה-contact
+        var contact = await GetContactByIdAsync(contactId);
+        if (contact == null) return null;
+
+        var pingSender = await GetPendingPingSenderAsync(phoneId, contact.Number);
+        if (pingSender == null) return null;
+
+        // עדכן את ה-match
+        pingSender.Lid = lid;
+        pingSender.ContactId = contactId;
+        pingSender.Status = "matched";
+        pingSender.MatchedAt = DateTime.UtcNow;
+
+        await _client.From<PingSender>().Update(pingSender);
+        _logger.LogInformation("Matched PingSender {Id} with LID {Lid}", pingSender.Id, lid);
+        return pingSender;
+    }
+    catch (Exception ex)
+    {
+        _logger.LogError(ex, "Error matching PingSender by LID");
+        return null;
+    }
+} 
+   
+#endregion
 }

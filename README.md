@@ -13,7 +13,57 @@
 - ✅ **Supabase Integration** - סנכרון עם מסד נתונים
 - ✅ **Webhook Integration** - קבלת events מ-containers
 
+
+
+
 ## ארכיטקטורה
+
+```mermaid
+flowchart TD
+
+    subgraph AGENT [".NET Core Agent (Port 5000)"]
+        CM["ContainerManager (on startup)"]
+        REG["RegisterWebhookInContainerAsync()\nרושם את עצמו כ-webhook בכל קונטיינר"]
+
+        API["POST /api/webhook/container-event/{phoneId}\n\n• authenticated → עדכון סטטוס + מספר טלפון\n• message → UpsertContact + AddMessage\n• disconnected → עדכון סטטוס שגיאה"]
+
+        CM --> REG
+    end
+
+    subgraph CONTAINER ["Docker Container (FastAPI - Port 8001+)"]
+        EVT["כל הודעה נכנסת\n→ שולח POST ל-Agent\n/internal/baileys-event"]
+    end
+
+    EVT -->|webhook פנימי| API
+
+
+---
+
+## 🔥 אופציה פשוטה (בלי Mermaid, רק Markdown רגיל)
+
+```markdown
+## Architecture
+
+### .NET Core Agent (Port 5000)
+
+- **ContainerManager (on startup)**
+  - RegisterWebhookInContainerAsync()
+  - רושם את עצמו כ-webhook בכל קונטיינר
+
+- **POST /api/webhook/container-event/{phoneId}**
+  - authenticated → עדכון סטטוס + מספר טלפון
+  - message → UpsertContact + AddMessage
+  - disconnected → עדכון סטטוס שגיאה
+
+⬆️ webhook פנימי
+
+### Docker Container (FastAPI - Port 8001+)
+
+- כל הודעה נכנסת
+- שולח POST ל-Agent
+- `/internal/baileys-event`
+
+
 ┌─────────────────────────────────────────────────────────────────┐
 │                    .NET Core Agent (Port 5000)                   │
 │                                                                  │
@@ -88,7 +138,7 @@
 
 ```javascript
 // GET /api/routes
-const response = await fetch('/api/routes');
+const response = await fetch('/api/routes');UID
 const { phones } = await response.json();
 
 // Response:
@@ -96,7 +146,7 @@ const { phones } = await response.json();
   "count": 2,
   "phones": [
     {
-      "phoneId": "uuid-1",
+      "phoneId": "uuid-1",UID
       "phoneNumber": "+972501234567",
       "label": "Office",
       "status": "running",

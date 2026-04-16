@@ -51,8 +51,10 @@ public class Phone : BaseModel
     [Column("error_message")]
     public string? ErrorMessage { get; set; }
 
-[Column("creds_base64")]
+    [Column("creds_base64")]
     public string? CredsBase64 { get; set; }
+
+    
 
     [Column("created_at")]
     public DateTime CreatedAt { get; set; }

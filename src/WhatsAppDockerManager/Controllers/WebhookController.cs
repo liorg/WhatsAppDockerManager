@@ -117,6 +117,8 @@ public class WebhookController : ControllerBase
                 if (payload.Data.TryGetValue("lid", out var lid))
                     contactLid = lid?.ToString();
             }
+            // נסה למצוא ולקשר PingSender לפי LID
+
 
             // Upsert contact - create if not exists, update if exists
             var contact = await _supabaseService.UpsertContactAsync(
@@ -126,7 +128,10 @@ public class WebhookController : ControllerBase
                 lid: contactLid
             );
             _logger.LogInformation("Contact upserted: {ContactId} ({Number})", contact.Id, contactNumber);
-
+           if (!string.IsNullOrEmpty(contactLid))
+            {
+                await _supabaseService.MatchPingSenderByLidAsync(phoneId, contactLid, contact.Id);
+            }
             // Determine message direction
             bool isIncoming = true;
            if (payload.Data?.TryGetValue("fromMe", out var fromMe) == true)
