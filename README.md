@@ -1,3 +1,4 @@
+
 # WhatsApp Docker Manager
 
 מערכת .NET Core לניהול Docker containers של WhatsApp (מבוסס Baileys) בצורה דינמית.
@@ -20,18 +21,15 @@
 
 
 ```mermaid
-## LAYERS
-
 flowchart TB
-    FE["Frontend (React)<br/><br/>GET /api/routes<br/>GET /wa/{phone}/qrcode/image<br/>POST /wa/{phone}/send/text"]
+    FE["Frontend (React)<br/><br/>GET /api/routes<br/>GET /wa/phone/qrcode/image<br/>POST /wa/phone/send/text"]
 
     subgraph MANAGER["WhatsApp Docker Manager (.NET)"]
         direction TB
-
-        YARP["YARP Proxy<br/>/wa/{phone}/ → Container"]
+        YARP["YARP Proxy<br/>/wa/phone/ -> Container"]
         CM["Container Manager<br/>Create / Start / Stop"]
         BG["Background Services<br/>Heartbeat / Health Check / Sync / Route Sync"]
-        WEBHOOK["Webhook Receiver<br/>POST /api/webhook/container-event/{phoneId}"]
+        WEBHOOK["Webhook Receiver<br/>POST /api/webhook/container-event/phoneId"]
     end
 
     subgraph CONTAINERS["Docker Containers"]
@@ -40,24 +38,19 @@ flowchart TB
         C3["Container 3<br/>:8003/:9003<br/>FastAPI"]
     end
 
-    %% Frontend → Manager
     FE -->|API Calls| YARP
     FE -->|Manage Containers| CM
 
-    %% Manager → Containers
     YARP --> C1
     YARP --> C2
     YARP --> C3
 
-    %% Containers → Manager (Webhook)
     C1 -->|events| WEBHOOK
     C2 -->|events| WEBHOOK
     C3 -->|events| WEBHOOK
 
-    %% Background influence
     BG -.-> CM
     BG -.-> YARP
-
 ```
 
 ┌─────────────────────────────────────────────────────────────────────┐
