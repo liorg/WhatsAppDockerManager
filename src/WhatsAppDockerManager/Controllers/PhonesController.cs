@@ -49,8 +49,7 @@ public async Task<IActionResult> Logout(Guid phoneId)
         }
 
         // 2. Delete auth files
-        var phoneIndex = phone.Number.Replace("+", "")
-            .Substring(Math.Max(0, phone.Number.Replace("+", "").Length - 3));
+        var phoneIndex = phone.Number.Replace("+", "");  // ← כל המספר
         var authPath = Path.Combine(_configuration["AppSettings:Docker:DataBasePath"] ?? "/opt/whatsapp-data", $"auth_{phoneIndex}");
         
         if (Directory.Exists(authPath))

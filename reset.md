@@ -53,6 +53,14 @@ docker run -d \
 
 
 
+curl -X POST http://localhost:5000/api/phones/provision \
+  -H "Content-Type: application/json" \
+  -d '{"phoneNumber": "+xxxxxxx", "nickname": "lior test"}'
+
+
+
+
+
 
 select * from phones
  select * FROM contacts
@@ -60,3 +68,7 @@ select * from phones
  select * FROM agent_events
  select * from agent_hosts
   select * from ping_sender
+
+
+
+

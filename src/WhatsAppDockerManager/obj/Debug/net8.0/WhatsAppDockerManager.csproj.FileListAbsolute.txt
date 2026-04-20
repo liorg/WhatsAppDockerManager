@@ -61,3 +61,8 @@
 /home/lior/projects/github/WhatsAppDockerManager/src/WhatsAppDockerManager/obj/Debug/net8.0/WhatsAppDockerManager.pdb
 /home/lior/projects/github/WhatsAppDockerManager/src/WhatsAppDockerManager/obj/Debug/net8.0/WhatsAppDockerManager.genruntimeconfig.cache
 /home/lior/projects/github/WhatsAppDockerManager/src/WhatsAppDockerManager/obj/Debug/net8.0/ref/WhatsAppDockerManager.dll
+/home/lior/projects/github/WhatsAppDockerManager/src/WhatsAppDockerManager/bin/Debug/net8.0/publish/web.config
+/home/lior/projects/github/WhatsAppDockerManager/src/WhatsAppDockerManager/bin/Debug/net8.0/publish/appsettings.Development.json
+/home/lior/projects/github/WhatsAppDockerManager/src/WhatsAppDockerManager/bin/Debug/net8.0/publish/appsettings.json
+/home/lior/projects/github/WhatsAppDockerManager/src/WhatsAppDockerManager/bin/Debug/net8.0/publish/WhatsAppDockerManager.deps.json
+/home/lior/projects/github/WhatsAppDockerManager/src/WhatsAppDockerManager/bin/Debug/net8.0/publish/WhatsAppDockerManager.runtimeconfig.json

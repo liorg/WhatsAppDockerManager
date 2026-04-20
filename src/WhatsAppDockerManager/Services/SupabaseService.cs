@@ -14,6 +14,7 @@ public interface ISupabaseService
     Task<DbHost?> GetHostByIdAsync(Guid hostId);
     Task SetHostStatusAsync(Guid hostId, string status);
     Task<int> GetNextAvailablePortAsync(Guid hostId, int rangeStart, int rangeEnd);
+    Task<List<DbHost>> GetDeadHostsAsync(int heartbeatTimeoutMinutes = 5);
 
     // Phone operations
     Task<List<Phone>> GetPhonesForHostAsync(Guid hostId);
@@ -88,49 +89,56 @@ public class SupabaseService : ISupabaseService
     {
         try
         {
-            var response = await _client.From<DbHost>()
-                .Where(h => h.HostName == hostName)
-                .Get();
+            DbHost? existingHost = null;
 
-            var existingHost = response.Models.FirstOrDefault();
+            // ── חפש לפי ExternalIp בלבד ──────────────────────────
+            if (!string.IsNullOrEmpty(externalIp))
+            {
+                var response = await _client.From<DbHost>()
+                    .Where(h => h.ExternalIp == externalIp)
+                    .Get();
+                existingHost = response.Models.FirstOrDefault();
+            }
 
             if (existingHost != null)
             {
-                existingHost.IpAddress = ipAddress;
-                existingHost.ExternalIp = externalIp;
+                // ── עדכן IpAddress (local) + HostName + heartbeat ──
+                existingHost.IpAddress     = ipAddress;   // ← local IP מתעדכן
+                existingHost.HostName      = hostName;
                 existingHost.LastHeartbeat = DateTime.UtcNow;
-                existingHost.Status = "active";
+                existingHost.Status        = "active";
                 existingHost.PortRangeStart = portRangeStart;
-                existingHost.PortRangeEnd = portRangeEnd;
-                existingHost.MaxContainers = maxContainers;
+                existingHost.PortRangeEnd   = portRangeEnd;
+                existingHost.MaxContainers  = maxContainers;
 
                 await _client.From<DbHost>().Update(existingHost);
-                _logger.LogInformation("Updated existing host: {HostName}", hostName);
+                _logger.LogInformation("Updated existing host by ExternalIp {ExternalIp} → LocalIp {LocalIp}", externalIp, ipAddress);
                 return existingHost;
             }
 
+            // ── צור host חדש ─────────────────────────────────────
             var newHost = new DbHost
             {
-                Id = Guid.NewGuid(),
-                HostName = hostName,
-                IpAddress = ipAddress,
-                ExternalIp = externalIp,
-                Status = "active",
-                LastHeartbeat = DateTime.UtcNow,
-                MaxContainers = maxContainers,
+                Id             = Guid.NewGuid(),
+                HostName       = hostName,
+                IpAddress      = ipAddress,    // ← local IP
+                ExternalIp     = externalIp,   // ← external IP
+                Status         = "active",
+                LastHeartbeat  = DateTime.UtcNow,
+                MaxContainers  = maxContainers,
                 PortRangeStart = portRangeStart,
-                PortRangeEnd = portRangeEnd,
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow
+                PortRangeEnd   = portRangeEnd,
+                CreatedAt      = DateTime.UtcNow,
+                UpdatedAt      = DateTime.UtcNow
             };
 
             var insertResponse = await _client.From<DbHost>().Insert(newHost);
-            _logger.LogInformation("Created new host: {HostName}", hostName);
+            _logger.LogInformation("Created new host: ExternalIp={ExternalIp} LocalIp={LocalIp}", externalIp, ipAddress);
             return insertResponse.Models.FirstOrDefault();
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error in GetOrCreateHostAsync for {HostName}", hostName);
+            _logger.LogError(ex, "Error in GetOrCreateHostAsync for ExternalIp={ExternalIp}", externalIp);
             throw;
         }
     }
@@ -200,6 +208,27 @@ public class SupabaseService : ISupabaseService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error setting host {HostId} status to {Status}", hostId, status);
+        }
+    }
+
+    public async Task<List<DbHost>> GetDeadHostsAsync(int heartbeatTimeoutMinutes = 5)
+    {
+        try
+        {
+            var cutoff = DateTime.UtcNow.AddMinutes(-heartbeatTimeoutMinutes);
+            var response = await _client.From<DbHost>()
+                .Where(h => h.Status == "active")
+                .Get();
+
+            // סנן בצד הלקוח כי Supabase C# לא תומך ב-DateTime comparison ישירות
+            return response.Models
+                .Where(h => h.LastHeartbeat < cutoff)
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error getting dead hosts");
+            return new List<DbHost>();
         }
     }
 

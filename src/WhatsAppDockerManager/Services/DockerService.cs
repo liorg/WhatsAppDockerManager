@@ -83,8 +83,7 @@ public class DockerService : IDockerService, IDisposable
         try
         {
             var containerName = $"whatsapp_{phone.Number.Replace("+", "")}";
-            var phoneIndex    = phone.Number.Replace("+", "")
-                                    .Substring(Math.Max(0, phone.Number.Replace("+", "").Length - 3));
+            var phoneIndex    = phone.Number.Replace("+", "");  // ← כל המספר, לא 3 ספרות
 
             // ── חישוב ports לפי hash ─────────────────────────────
             var (fastApiPort, baileysPort) = PortHashCalculator.GetBothPorts(

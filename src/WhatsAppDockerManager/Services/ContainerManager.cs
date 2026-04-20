@@ -55,10 +55,54 @@ public class ContainerManager : IContainerManager
 
             _logger.LogInformation("Initializing Container Manager...");
 
+            // ── זיהוי HostName אוטומטי אם לא מוגדר ─────────────
+            var hostName = _hostSettings.HostName;
+            if (string.IsNullOrEmpty(hostName))
+            {
+                hostName = System.Net.Dns.GetHostName();
+                _logger.LogInformation("Detected host name: {HostName}", hostName);
+            }
+
+            // ── זיהוי IP מקומי אוטומטי אם לא מוגדר ─────────────
+            var localIp = _hostSettings.IpAddress;
+            if (string.IsNullOrEmpty(localIp) || localIp == "0.0.0.0")
+            {
+                try
+                {
+                    localIp = System.Net.Dns.GetHostEntry(System.Net.Dns.GetHostName())
+                        .AddressList
+                        .FirstOrDefault(a => a.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
+                        ?.ToString() ?? "0.0.0.0";
+                    _logger.LogInformation("Detected local IP: {LocalIp}", localIp);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Could not detect local IP");
+                }
+            }
+
+            // ── זיהוי IP חיצוני אוטומטי אם לא מוגדר ────────────
+            var externalIp = _hostSettings.ExternalIp;
+            if (string.IsNullOrEmpty(externalIp))
+            {
+                try
+                {
+                    using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+                    externalIp = (await http.GetStringAsync("http://checkip.amazonaws.com")).Trim();
+                    //"http://checkip.amazonaws.com" https://api.ipify.org")
+                    _logger.LogInformation("Detected external IP: {ExternalIp}", externalIp);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Could not detect external IP — using local IP as fallback");
+                    externalIp = localIp;
+                }
+            }
+
             _currentHost = await _supabaseService.GetOrCreateHostAsync(
-                _hostSettings.HostName,
-                _hostSettings.IpAddress,
-                _hostSettings.ExternalIp,
+                hostName,
+                localIp,
+                externalIp,
                 _hostSettings.PortRangeStart,
                 _hostSettings.PortRangeEnd,
                 _hostSettings.MaxContainers
@@ -108,6 +152,12 @@ public class ContainerManager : IContainerManager
             // ── חשב שני ports ────────────────────────────────────
             var (fastApiPort, baileysPort) = PortHashCalculator.GetBothPorts(phone.Number, _configuration);
 
+            // ── שחזר creds אם קיים — בלי QR! ────────────────────
+            if (!string.IsNullOrEmpty(phone.CredsBase64))
+            {
+                await RestoreCredsAsync(phone);
+            }
+
             var containerId = await _dockerService.CreateAndStartContainerAsync(phone);
 
             if (containerId == null)
@@ -155,6 +205,33 @@ public class ContainerManager : IContainerManager
             await _supabaseService.UpdatePhoneDockerStatusAsync(
                 phone.Id, PhoneDockerStatus.Error, errorMessage: ex.Message);
             return false;
+        }
+    }
+
+    /// <summary>
+    /// שחזר creds.json מ-DB לפני הפעלת container — כך הוא יתחבר בלי QR
+    /// </summary>
+    private async Task RestoreCredsAsync(Phone phone)
+    {
+        try
+        {
+            var phoneIndex = phone.Number.Replace("+", "");  // ← כל המספר
+            var authPath = Path.Combine(_dockerSettings.DataBasePath, $"auth_{phoneIndex}");
+
+            Directory.CreateDirectory(authPath);
+
+            var credsBytes = Convert.FromBase64String(phone.CredsBase64!);
+            var credsPath  = Path.Combine(authPath, "creds.json");
+
+            await File.WriteAllBytesAsync(credsPath, credsBytes);
+
+            _logger.LogInformation(
+                "Restored creds.json for phone {PhoneNumber} → {Path}",
+                phone.Number, credsPath);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to restore creds for phone {PhoneNumber}", phone.Number);
         }
     }
 
@@ -354,28 +431,110 @@ public class ContainerManager : IContainerManager
         {
             _logger.LogWarning("Taking over phones from dead host {DeadHostId}", deadHostId);
 
+            // ── קבל את כל הטלפונים של השרת המת ──────────────────
             var phones       = await _supabaseService.GetPhonesForHostAsync(deadHostId);
             var currentCount = (await _supabaseService.GetPhonesForHostAsync(_currentHost.Id)).Count;
+
+            var takenOver  = new List<Guid>();
+            var skipped    = new List<Guid>();
+            var recovered  = new List<Guid>();
 
             foreach (var phone in phones)
             {
                 if (currentCount >= _hostSettings.MaxContainers)
                 {
-                    _logger.LogWarning("Host at capacity, cannot take over more phones");
-                    break;
+                    _logger.LogWarning("Host at capacity ({Max}), cannot take over more phones", _hostSettings.MaxContainers);
+                    skipped.Add(phone.Id);
+                    continue;
                 }
 
-                _logger.LogInformation("Taking over phone {PhoneNumber} from dead host", phone.Number);
-                await _supabaseService.AssignPhoneToHostAsync(phone.Id, _currentHost.Id);
-                await StartPhoneContainerAsync(phone);
-                await _supabaseService.LogAgentEventAsync(
-                    _currentHost.Id, AgentEventType.Migrated,
-                    new { phoneId = phone.Id, fromHostId = deadHostId, toHostId = _currentHost.Id });
+                try
+                {
+                    _logger.LogInformation(
+                        "Taking over phone {PhoneNumber} from dead host {DeadHostId}",
+                        phone.Number, deadHostId);
 
-                currentCount++;
+                    // ── הקצה לשרת הנוכחי ──────────────────────────
+                    await _supabaseService.AssignPhoneToHostAsync(phone.Id, _currentHost.Id);
+
+                    // ── אם יש creds — שחזר קובץ ועלה container ────
+                    var hasCredentials = !string.IsNullOrEmpty(phone.CredsBase64);
+
+                    if (hasCredentials)
+                    {
+                        _logger.LogInformation(
+                            "Phone {PhoneNumber} has credentials — restoring and starting container",
+                            phone.Number);
+                        await RestoreCredsAsync(phone);
+                    }
+                    else
+                    {
+                        _logger.LogWarning(
+                            "Phone {PhoneNumber} has no credentials — will need QR scan",
+                            phone.Number);
+                    }
+
+                    // ── הפעל container ────────────────────────────
+                    var started = await StartPhoneContainerAsync(phone);
+
+                    if (started)
+                    {
+                        takenOver.Add(phone.Id);
+                        recovered.Add(phone.Id);
+
+                        // ── תעד במפורש מי לקח את מי ─────────────
+                        await _supabaseService.LogAgentEventAsync(
+                            _currentHost.Id,
+                            AgentEventType.Migrated,
+                            new
+                            {
+                                action          = "takeover",
+                                phoneId         = phone.Id,
+                                phoneNumber     = phone.Number,
+                                fromHostId      = deadHostId,
+                                toHostId        = _currentHost.Id,
+                                hadCredentials  = hasCredentials,
+                                restoredWithout = hasCredentials ? "QR" : "needs_QR",
+                                timestamp       = DateTime.UtcNow
+                            });
+
+                        currentCount++;
+                    }
+                    else
+                    {
+                        _logger.LogError(
+                            "Failed to start container for phone {PhoneNumber} during takeover",
+                            phone.Number);
+                    }
+                }
+                catch (Exception phoneEx)
+                {
+                    _logger.LogError(phoneEx,
+                        "Error taking over phone {PhoneNumber}", phone.Number);
+                }
             }
 
+            // ── סמן את השרת המת כ-inactive ───────────────────────
             await _supabaseService.SetHostStatusAsync(deadHostId, "inactive");
+
+            // ── תעד סיכום ה-takeover ──────────────────────────────
+            await _supabaseService.LogAgentEventAsync(
+                _currentHost.Id,
+                AgentEventType.Migrated,
+                new
+                {
+                    action       = "takeover_summary",
+                    fromHostId   = deadHostId,
+                    toHostId     = _currentHost.Id,
+                    totalPhones  = phones.Count,
+                    takenOver    = takenOver.Count,
+                    skipped      = skipped.Count,
+                    timestamp    = DateTime.UtcNow
+                });
+
+            _logger.LogInformation(
+                "Takeover complete: {TakenOver}/{Total} phones from host {DeadHostId}",
+                takenOver.Count, phones.Count, deadHostId);
         }
         catch (Exception ex)
         {
