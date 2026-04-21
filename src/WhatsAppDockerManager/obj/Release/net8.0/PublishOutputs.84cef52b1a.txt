@@ -1,6 +1,11 @@
 /home/lior/projects/github/WhatsAppDockerManager/src/WhatsAppDockerManager/publish/WhatsAppDockerManager
+/home/lior/projects/github/WhatsAppDockerManager/src/WhatsAppDockerManager/publish/publish/web.config
 /home/lior/projects/github/WhatsAppDockerManager/src/WhatsAppDockerManager/publish/appsettings.Development.json
 /home/lior/projects/github/WhatsAppDockerManager/src/WhatsAppDockerManager/publish/appsettings.json
+/home/lior/projects/github/WhatsAppDockerManager/src/WhatsAppDockerManager/publish/publish/appsettings.Development.json
+/home/lior/projects/github/WhatsAppDockerManager/src/WhatsAppDockerManager/publish/publish/appsettings.json
+/home/lior/projects/github/WhatsAppDockerManager/src/WhatsAppDockerManager/publish/publish/WhatsAppDockerManager.deps.json
+/home/lior/projects/github/WhatsAppDockerManager/src/WhatsAppDockerManager/publish/publish/WhatsAppDockerManager.runtimeconfig.json
 /home/lior/projects/github/WhatsAppDockerManager/src/WhatsAppDockerManager/publish/WhatsAppDockerManager.dll
 /home/lior/projects/github/WhatsAppDockerManager/src/WhatsAppDockerManager/publish/WhatsAppDockerManager.deps.json
 /home/lior/projects/github/WhatsAppDockerManager/src/WhatsAppDockerManager/publish/WhatsAppDockerManager.runtimeconfig.json
