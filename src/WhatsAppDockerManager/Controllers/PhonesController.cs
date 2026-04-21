@@ -149,7 +149,14 @@ public async Task<IActionResult> Logout(Guid phoneId)
                 ApiPort = fastApiPort,
             });
             _logger.LogInformation("Created new phone record for {Phone}", normalizedPhone);
+    
+        
         }
+            if (request.UserId.HasValue && phone.UserId != request.UserId)
+            {
+                            await _supabaseService.UpdatePhoneUserIdAsync(phone.Id, request.UserId.Value);
+                            phone.UserId = request.UserId.Value;
+            }
 
         // Check if container is running
         var containerRunning = !string.IsNullOrEmpty(phone.ContainerId)
@@ -254,7 +261,62 @@ public async Task<IActionResult> Logout(Guid phoneId)
             return StatusCode(503, new { error = "QR not available yet" });
         }
     }
+/// <summary>
+/// Pause phone — stop + remove container + delete logs. Creds preserved for resume.
+/// </summary>
+[HttpPost("{phoneId}/pause")]
+public async Task<IActionResult> Pause(Guid phoneId)
+{
+    var phone = await _supabaseService.GetPhoneByIdAsync(phoneId);
+    if (phone == null)
+        return NotFound(new { error = "Phone not found" });
 
+    var success = await _containerManager.PausePhoneContainerAsync(phone);
+
+    if (!success)
+        return StatusCode(500, new { error = "Failed to pause phone" });
+
+    return Ok(new
+    {
+        success = true,
+        message = "Phone paused. Container removed, logs cleared. Creds preserved — use /provision to resume.",
+        resumeUrl = $"/api/phones/{phoneId}/resume"
+    });
+}
+
+/// <summary>
+/// Resume a paused phone — restart container using saved creds (no QR needed if creds exist)
+/// </summary>
+[HttpPost("{phoneId}/resume")]
+public async Task<IActionResult> Resume(Guid phoneId)
+{
+    var phone = await _supabaseService.GetPhoneByIdAsync(phoneId);
+    if (phone == null)
+        return NotFound(new { error = "Phone not found" });
+
+    var started = await _containerManager.StartPhoneContainerAsync(phone);
+    if (!started)
+        return StatusCode(500, new { error = "Failed to resume phone" });
+
+    await Task.Delay(3000);
+
+    var (fastApiPort, _) = PortHashCalculator.GetBothPorts(phone.Number, _configuration);
+    var waStatus = await GetContainerStatus(fastApiPort);
+
+    if (waStatus == "connected")
+        return Ok(new { success = true, status = "connected", message = "Phone resumed and connected" });
+
+    var qrData = await GetContainerQr(fastApiPort);
+    return Ok(new
+    {
+        success = true,
+        status = "qr_ready",
+        message = "Phone resumed — scan QR to reconnect",
+        qr = qrData?.Qr,
+        qrImageBase64 = qrData?.QrImageBase64,
+        qrRefreshUrl = $"/api/phones/{phoneId}/qrcode"
+    });
+}
     private async Task<string> GetContainerStatus(int fastApiPort)
     {
         try
@@ -283,6 +345,7 @@ public async Task<IActionResult> Logout(Guid phoneId)
 // DTOs
 public record ProvisionRequest
 {
+    public Guid? UserId { get; init; }
     public string PhoneNumber { get; init; } = "";
     public string? Nickname { get; init; }
     public string? Tag { get; init; }

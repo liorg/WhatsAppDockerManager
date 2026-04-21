@@ -60,6 +60,9 @@ public interface ISupabaseService
     Task<PingSender> CreatePingSenderAsync(Guid phoneId, string targetNumber, string? pingMessageId);
     Task<PingSender?> GetPendingPingSenderAsync(Guid phoneId, string targetNumber);
     Task<PingSender?> MatchPingSenderByLidAsync(Guid phoneId, string lid, Guid contactId);
+    Task UpdatePhoneUserIdAsync(Guid phoneId, Guid userId);
+    
+    Task DetachPhoneFromHostAsync(Guid phoneId);
 }
 
 public class SupabaseService : ISupabaseService
@@ -263,6 +266,45 @@ public class SupabaseService : ISupabaseService
 
     #region Phone Operations
 
+public async Task DetachPhoneFromHostAsync(Guid phoneId)
+{
+    try
+    {
+        var phone = await GetPhoneByIdAsync(phoneId);
+        if (phone != null)
+        {
+            phone.HostId       = null;
+            phone.ContainerId  = null;
+            phone.ContainerName = null;
+            phone.DockerUrl    = null;
+            phone.DockerStatus = PhoneDockerStatus.Stopped;
+            await _client.From<Phone>().Update(phone);
+            _logger.LogInformation("Detached phone {PhoneId} from host", phoneId);
+        }
+    }
+    catch (Exception ex)
+    {
+        _logger.LogError(ex, "Error detaching phone {PhoneId} from host", phoneId);
+    }
+}
+// ב-SupabaseService — הוסף implementation בתוך #region Phone Operations:
+public async Task UpdatePhoneUserIdAsync(Guid phoneId, Guid userId)
+{
+    try
+    {
+        var phone = await GetPhoneByIdAsync(phoneId);
+        if (phone != null)
+        {
+            phone.UserId = userId;
+            await _client.From<Phone>().Update(phone);
+            _logger.LogInformation("Updated phone {PhoneId} user_id to {UserId}", phoneId, userId);
+        }
+    }
+    catch (Exception ex)
+    {
+        _logger.LogError(ex, "Error updating phone {PhoneId} user_id", phoneId);
+    }
+}
     public async Task<List<Phone>> GetPhonesForHostAsync(Guid hostId)
     {
         try

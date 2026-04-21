@@ -14,6 +14,7 @@ public interface IContainerManager
     Task HealthCheckAllAsync();
     Task TakeOverFromDeadHostAsync(Guid deadHostId);
     Guid? CurrentHostId { get; }
+    Task<bool> PausePhoneContainerAsync(Phone phone);
 }
 
 public class ContainerManager : IContainerManager
@@ -185,10 +186,10 @@ public class ContainerManager : IContainerManager
                 dockerUrl:     dockerUrl);
 
             // ── רשום webhook ישירות ב-Baileys (port 3001) ────────
-            await RegisterWebhookInContainerAsync(baileysPort, phone.Id);
+            await RegisterWebhookInContainerAsync(fastApiPort, phone.Id);
 
             // ── אם כבר connected — בקש resend-auth מ-Baileys ────
-            await ReSendAuthIfConnectedAsync(baileysPort, phone.Id);
+            await ReSendAuthIfConnectedAsync(fastApiPort, phone.Id);
 
             await _supabaseService.LogAgentEventAsync(
                 _currentHost.Id, AgentEventType.Started,
@@ -238,33 +239,57 @@ public class ContainerManager : IContainerManager
     /// <summary>
     /// רשום webhook ישירות ב-Baileys (port 3001) — כך ה-authenticated event יגיע
     /// </summary>
-    private async Task RegisterWebhookInContainerAsync(int baileysPort, Guid phoneId)
+private async Task RegisterWebhookInContainerAsync(int fastApiPort, Guid phoneId)
+{
+    try
     {
-        try
+        // ← הגדל מ-3000 ל-8000
+        await Task.Delay(8000);
+
+        using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+
+        var host           = "172.17.0.1";
+        var managerWebhook = $"http://{host}:5000/api/webhook/container-event/{phoneId}";
+        var payload        = new { url = managerWebhook, secret = "manager-secret" };
+
+        // ← נסה עד 3 פעמים
+        for (int attempt = 1; attempt <= 3; attempt++)
         {
-            await Task.Delay(3000);
+            try
+            {
+                var response = await httpClient.PostAsJsonAsync(
+                    $"http://localhost:{fastApiPort}/webhooks/register", payload);
 
-            using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+                if (response.IsSuccessStatusCode)
+                {
+                    _logger.LogInformation(
+                        "Webhook registered in Baileys for phone {PhoneId} on port {Port} (attempt {Attempt})",
+                        phoneId, fastApiPort, attempt);
+                    return;
+                }
 
-            var host           = "172.17.0.1";
-            var managerWebhook = $"http://{host}:5000/api/webhook/container-event/{phoneId}";
+                _logger.LogWarning(
+                    "Webhook registration attempt {Attempt} failed: {Status}",
+                    attempt, response.StatusCode);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    "Webhook registration attempt {Attempt} {fastApiPort} error: {Message} ",
+                    attempt,fastApiPort, ex.Message);
+            }
 
-            var payload = new { url = managerWebhook, secret = "manager-secret" };
-
-            // ← ב-Baileys (port 3001) ולא ב-FastAPI (port 8000)
-            var response = await httpClient.PostAsJsonAsync(
-                $"http://localhost:{baileysPort}/webhooks/register", payload);
-
-            if (response.IsSuccessStatusCode)
-                _logger.LogInformation("Webhook registered in Baileys for phone {PhoneId} on port {Port}", phoneId, baileysPort);
-            else
-                _logger.LogWarning("Failed to register webhook in Baileys: {Status}", response.StatusCode);
+            if (attempt < 3)
+                await Task.Delay(5000); // ← המתן 5 שניות בין ניסיונות
         }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Could not register webhook in Baileys for phone {PhoneId}", phoneId);
-        }
+
+        _logger.LogWarning("Could not register webhook after 3 attempts for  {fastApiPort} phone {PhoneId}", fastApiPort, phoneId);
     }
+    catch (Exception ex)
+    {
+        _logger.LogWarning(ex, "Could not register webhook in fastApiPort {fastApiPort} for phone {PhoneId}", fastApiPort, phoneId);
+    }
+}
 
     /// <summary>
     /// אם ה-container כבר connected — בקש ממנו לשלוח שוב את ה-authenticated event עם creds
@@ -541,6 +566,85 @@ public class ContainerManager : IContainerManager
             _logger.LogError(ex, "Error taking over from dead host {DeadHostId}", deadHostId);
         }
     }
+    // ב-ContainerManager — הוסף method:
+public async Task<bool> PausePhoneContainerAsync(Phone phone)
+{
+    if (_currentHost == null)
+    {
+        _logger.LogError("Host not initialized");
+        return false;
+    }
+
+    try
+    {
+        _logger.LogInformation("Pausing phone {PhoneNumber}", phone.Number);
+
+        // 1. Stop container
+        if (!string.IsNullOrEmpty(phone.ContainerId))
+        {
+            await _dockerService.StopContainerAsync(phone.ContainerId);
+            _logger.LogInformation("Stopped container {ContainerId}", phone.ContainerId);
+        }
+
+        // 2. Remove container
+        if (!string.IsNullOrEmpty(phone.ContainerId))
+        {
+            await _dockerService.RemoveContainerAsync(phone.ContainerId);
+            _logger.LogInformation("Removed container {ContainerId}", phone.ContainerId);
+        }
+
+        // 3. מחק את כל הקבצים — auth + logs
+        var phoneIndex = phone.Number.Replace("+", "");
+
+        var authPath = Path.Combine(_dockerSettings.DataBasePath, $"auth_{phoneIndex}");
+        if (Directory.Exists(authPath))
+        {
+            Directory.Delete(authPath, recursive: true);
+            _logger.LogInformation("Deleted auth files at {Path}", authPath);
+        }
+
+        var logsPath = Path.Combine(_dockerSettings.DataBasePath, $"logs_{phoneIndex}");
+        if (Directory.Exists(logsPath))
+        {
+            Directory.Delete(logsPath, recursive: true);
+            _logger.LogInformation("Deleted logs at {Path}", logsPath);
+        }
+        // הוסף אחרי מחיקת logsPath
+        var contactsPath = Path.Combine(_dockerSettings.DataBasePath, $"contacts_{phoneIndex}");
+        if (Directory.Exists(contactsPath))
+        {
+            Directory.Delete(contactsPath, recursive: true);
+            _logger.LogInformation("Deleted contacts files at {Path}", contactsPath);
+        }
+
+        // 4. נתק מה-host — null על host_id
+        await _supabaseService.UpdatePhoneDockerStatusAsync(
+            phone.Id,
+            PhoneDockerStatus.Stopped,
+            containerId:   "",
+            containerName: "",
+            dockerUrl:     "");
+
+        await _supabaseService.DetachPhoneFromHostAsync(phone.Id);  // ← host_id = null
+
+        await _supabaseService.LogAgentEventAsync(
+            _currentHost.Id,
+            AgentEventType.Stopped,
+            new { phoneId = phone.Id, action = "pause", phoneNumber = phone.Number });
+
+        _logger.LogInformation("Phone {PhoneNumber} paused and detached from host", phone.Number);
+        return true;
+    }
+    catch (Exception ex)
+    {
+        _logger.LogError(ex, "Error pausing phone {PhoneNumber}", phone.Number);
+        await _supabaseService.UpdatePhoneDockerStatusAsync(
+            phone.Id, PhoneDockerStatus.Error, errorMessage: ex.Message);
+        return false;
+    }
+}
+
+
 }
 
 // DTO לבדיקת status

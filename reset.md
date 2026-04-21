@@ -55,11 +55,16 @@ docker run -d \
 
 curl -X POST http://localhost:5000/api/phones/provision \
   -H "Content-Type: application/json" \
-  -d '{"phoneNumber": "+xxxxxxx", "nickname": "lior test"}'
+  -d '{"phoneNumber": "+xxxxxxx", "nickname": "lior test","userId": "64354708-3745-4050-94ea-703a85998ccd"}'
 
 
 
-
+{
+  "userId": "64354708-3745-4050-94ea-703a85998ccd",
+  "phoneNumber": "972504476645",
+  "nickname": "LIOR TEST",
+  "tag": "TEST"
+}
 
 
 select * from phones

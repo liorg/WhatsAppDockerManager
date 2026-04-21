@@ -1,1 +1,8 @@
+
+
+cd ~/projects/github/WhatsAppDockerManager/src/WhatsAppDockerManager
 dotnet run 2>&1 | grep -i "external\|detected\|local"
+dotnet run > log.txt 2>&1
+
+# ראה את השגיאה המלאה
+docker logs whatsapp-manager 2>&1 | grep -A 5 "JsonException\|Serializ\|cycle"

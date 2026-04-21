@@ -46,11 +46,24 @@ public class HostController : ControllerBase
     }
 
     [HttpGet("all")]
-    public async Task<IActionResult> GetAllHosts()
+public async Task<IActionResult> GetAllHosts()
+{
+    var hosts = await _supabaseService.GetActiveHostsAsync();
+    
+    return Ok(hosts.Select(h => new
     {
-        var hosts = await _supabaseService.GetActiveHostsAsync();
-        return Ok(hosts);
-    }
+        id             = h.Id,
+        hostName       = h.HostName,
+        ipAddress      = h.IpAddress,
+        externalIp     = h.ExternalIp,
+        status         = h.Status,
+        lastHeartbeat  = h.LastHeartbeat,
+        maxContainers  = h.MaxContainers,
+        portRangeStart = h.PortRangeStart,
+        portRangeEnd   = h.PortRangeEnd,
+        createdAt      = h.CreatedAt
+    }));
+}
 
     [HttpPost("sync")]
     public async Task<IActionResult> TriggerSync()

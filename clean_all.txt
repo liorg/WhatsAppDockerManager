@@ -1,0 +1,30 @@
+WhatsAppDockerManager# ראה את כל הcontainers והשמות שלהם
+docker ps -a --format "table {{.Names}}\t{{.Status}}\t{{.Image}}"
+
+
+# עצור והסר את כל הcontainers חוץ מRedis
+docker stop $(docker ps -q --filter "name=redis" | xargs -I {} docker ps -q | grep -v {})
+
+# דרך יותר בטוחה — הסר הכל חוץ מcontainers עם "redis" בשם
+docker ps -a --format "{{.Names}}" | grep -v redis | xargs docker stop
+docker ps -a --format "{{.Names}}" | grep -v redis | xargs docker rm
+
+# בדוק קודם מה יש
+ls /opt/whatsapp-data/
+
+
+# מחק את auth files
+sudo rm -rf /opt/whatsapp-data/auth_*
+sudo rm -rf /opt/whatsapp-data/logs_*
+sudo rm -rf /opt/whatsapp-data/contacts_*
+
+
+# או איפה שה-DataBasePath מוגדר
+
+# 3. מחק לוגים
+sudo rm -rf src/WhatsAppDockerManager/logs/*
+
+# בדיקה
+ls /opt/whatsapp-data/
+
+docker start redis_shared && docker ps | grep redis
