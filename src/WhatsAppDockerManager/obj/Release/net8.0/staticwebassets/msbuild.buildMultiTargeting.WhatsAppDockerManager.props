@@ -1,3 +1,0 @@
-﻿<Project>
-  <Import Project="../build/WhatsAppDockerManager.props" />
-</Project>

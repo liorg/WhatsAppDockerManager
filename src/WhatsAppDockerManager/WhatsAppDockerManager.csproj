@@ -5,6 +5,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>WhatsAppDockerManager</RootNamespace>
+    <Version>1.0.0</Version>
   </PropertyGroup>
 
   <ItemGroup>
@@ -17,7 +18,7 @@
     <PackageReference Include="Swashbuckle.AspNetCore" Version="10.1.7" />
     
     <!-- Supabase -->
-    
+
 
     
     <!-- Background Services -->

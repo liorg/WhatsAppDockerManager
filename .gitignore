@@ -5,3 +5,5 @@ logs/
 publish/
 /obj
 bin/
+bin/debug/*
+bin/release/
