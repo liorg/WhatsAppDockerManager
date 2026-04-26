@@ -1,0 +1,47 @@
+name: Build and Release
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Read version
+        id: version
+        run: |
+          VERSION=$(grep -oPm1 "(?<=<Version>)[^<]+" WhatsAppDockerManager.csproj)
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Publish
+        run: |
+          dotnet publish WhatsAppDockerManager.csproj -c Release -o publish
+
+      - name: Zip artifact
+        run: |
+          cd publish
+          zip -r ../WhatsAppDockerManager-v${{ env.VERSION }}.zip .
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.VERSION }}
+          name: v${{ env.VERSION }}
+          files: WhatsAppDockerManager-v${{ env.VERSION }}.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
