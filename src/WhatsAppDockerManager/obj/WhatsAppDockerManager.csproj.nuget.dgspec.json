@@ -5,7 +5,7 @@
   },
   "projects": {
     "/home/lior/projects/github/WhatsAppDockerManager/src/WhatsAppDockerManager/WhatsAppDockerManager.csproj": {
-      "version": "1.0.0",
+      "version": "1.0.3",
       "restore": {
         "projectUniqueName": "/home/lior/projects/github/WhatsAppDockerManager/src/WhatsAppDockerManager/WhatsAppDockerManager.csproj",
         "projectName": "WhatsAppDockerManager",

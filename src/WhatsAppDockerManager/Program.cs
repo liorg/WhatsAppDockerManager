@@ -112,12 +112,19 @@ app.MapGet("/version", () =>
             ?.InformationalVersion
         ?? assembly.GetName().Version?.ToString()
         ?? "unknown";
+var rawVersion =
+    assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+        ?.InformationalVersion
+    ?? assembly.GetName().Version?.ToString()
+    ?? "unknown";
 
-    return Results.Ok(new
-    {
-        app = "WhatsAppDockerManager",
-        version
-    });
+var cleanVersion = rawVersion.Split('+')[0];
+ return Results.Ok(new
+{
+    app = "WhatsAppDockerManager",
+    version = cleanVersion,
+    fullVersion = rawVersion
+});
 });
 Log.Information("WhatsApp Docker Manager starting on {Urls}", builder.Configuration["Urls"] ?? "http://localhost:5000");
 
