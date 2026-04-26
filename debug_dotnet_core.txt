@@ -6,3 +6,14 @@ dotnet run > log.txt 2>&1
 
 # ראה את השגיאה המלאה
 docker logs whatsapp-manager 2>&1 | grep -A 5 "JsonException\|Serializ\|cycle"
+
+
+
+# לפני pause
+docker ps -a | grep whatsapp_972504476645
+
+# אחרי pause — אמור להיות ריק
+docker ps -a | grep whatsapp_972504476645
+
+# ובדוק שהקבצים נמחקו
+ls /opt/whatsapp-data/ | grep 972504476645

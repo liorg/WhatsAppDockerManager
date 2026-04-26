@@ -1,7 +1,7 @@
 using Serilog;
 using WhatsAppDockerManager.Configuration;
 using WhatsAppDockerManager.Services;
-
+using System.Reflection;
 DotNetEnv.Env.Load();
 var builder = WebApplication.CreateBuilder(args);
 
@@ -103,7 +103,22 @@ app.MapControllers();
 
 // Health check endpoint
 app.MapGet("/health", () => Results.Ok(new { status = "healthy", timestamp = DateTime.UtcNow }));
+app.MapGet("/version", () =>
+{
+    var assembly = Assembly.GetExecutingAssembly();
 
+    var version =
+        assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+            ?.InformationalVersion
+        ?? assembly.GetName().Version?.ToString()
+        ?? "unknown";
+
+    return Results.Ok(new
+    {
+        app = "WhatsAppDockerManager",
+        version
+    });
+});
 Log.Information("WhatsApp Docker Manager starting on {Urls}", builder.Configuration["Urls"] ?? "http://localhost:5000");
 
 try
