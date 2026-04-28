@@ -115,6 +115,8 @@ public class ContainerManager : IContainerManager
             _logger.LogInformation("Host registered: {HostId} ({HostName})", _currentHost.Id, _currentHost.HostName);
 
             _logger.LogInformation("Ensuring Docker image is available: {Image}", _dockerSettings.ImageName);
+           
+            await _dockerService.EnsureNetworkExistsAsync("whatsapp_network"); // ← 
             await _dockerService.PullImageAsync(_dockerSettings.ImageName);
 
             await SyncContainersAsync();

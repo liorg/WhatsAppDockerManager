@@ -15,6 +15,7 @@ public interface IDockerService
     Task<bool> IsContainerRunningAsync(string containerId);
     Task<IList<ContainerListResponse>> ListContainersAsync(bool all = false);
     Task<bool> CheckHealthAsync(string containerId, int apiPort);
+    Task EnsureNetworkExistsAsync(string networkName);
 }
 
 public class DockerService : IDockerService, IDisposable
@@ -297,9 +298,42 @@ public class DockerService : IDockerService, IDisposable
             return false;
         }
     }
+    public async Task EnsureNetworkExistsAsync(string networkName)
+{
+    try
+    {
+        var networks = await _client.Networks.ListNetworksAsync(new NetworksListParameters
+        {
+            Filters = new Dictionary<string, IDictionary<string, bool>>
+            {
+                { "name", new Dictionary<string, bool> { { networkName, true } } }
+            }
+        });
+
+        if (networks.Any(n => n.Name == networkName))
+        {
+            _logger.LogInformation("Network {Network} already exists", networkName);
+            return;
+        }
+
+        await _client.Networks.CreateNetworkAsync(new NetworksCreateParameters
+        {
+            Name   = networkName,
+            Driver = "bridge"
+        });
+
+        _logger.LogInformation("Created Docker network: {Network}", networkName);
+    }
+    catch (Exception ex)
+    {
+        _logger.LogError(ex, "Failed to ensure network {Network} exists", networkName);
+        throw;
+    }
+}
 
     public void Dispose()
     {
         _client?.Dispose();
     }
+    
 }
