@@ -64,3 +64,7 @@ sudo rm /opt/whatsapp-data/auth_972546252291/creds.json
 
 
 ls /opt/whatsapp-data/auth_972546252291/
+
+
+<pre> journalctl -u whatsapp-manager -n 50
+</pre>

@@ -387,7 +387,7 @@ sudo systemctl start whatsapp-manager
 # ── בדיקה 
 sudo systemctl status whatsapp-manager
 journalctl -u whatsapp-manager -f
-
+journalctl -u whatsapp-manager -n 50
 
 docker logs whatsapp_972-XXXXXXX --tail 50
 

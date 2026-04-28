@@ -117,6 +117,9 @@ public class ContainerManager : IContainerManager
             _logger.LogInformation("Ensuring Docker image is available: {Image}", _dockerSettings.ImageName);
            
             await _dockerService.EnsureNetworkExistsAsync("whatsapp_network"); // ← 
+            
+            await _dockerService.EnsureRedisContainerRunningAsync(); // ← 
+
             await _dockerService.PullImageAsync(_dockerSettings.ImageName);
 
             await SyncContainersAsync();

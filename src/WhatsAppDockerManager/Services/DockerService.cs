@@ -7,15 +7,22 @@ namespace WhatsAppDockerManager.Services;
 
 public interface IDockerService
 {
+    // ← חדש: משוך image מה-Registry אם לא קיים מקומית (או תמיד, לפי config)
     Task<bool> PullImageAsync(string imageName);
     Task<string?> CreateAndStartContainerAsync(Phone phone);
+    // ← חדש: עצירת קונטיינר לפי ID (למשל לפני הסרה או סנכרון)  
     Task<bool> StopContainerAsync(string containerId);
     Task<bool> RemoveContainerAsync(string containerId);
+    // ← חדש: קבל מידע מפורט על קונטיינר לפי ID (כולל סטטוס, פורטים, לוגים וכו')    
     Task<ContainerInspectResponse?> InspectContainerAsync(string containerId);
     Task<bool> IsContainerRunningAsync(string containerId);
+    // ← חדש: רשימת כל הקונטיינרים של האפליקציה (כולל לא רצים)  
     Task<IList<ContainerListResponse>> ListContainersAsync(bool all = false);
     Task<bool> CheckHealthAsync(string containerId, int apiPort);
+    // ← חדש: יצירת network משותף לכל הקונטיינרים (כולל Redis) כדי שיוכלו לתקשר ביניהם  
     Task EnsureNetworkExistsAsync(string networkName);
+    // ← חדש: Redis רץ ב-container נפרד, צריך לוודא שהוא רץ לפני שמפעילים את שאר הקונטיינרים    
+    Task EnsureRedisContainerRunningAsync();
 }
 
 public class DockerService : IDockerService, IDisposable
@@ -327,6 +334,67 @@ public class DockerService : IDockerService, IDisposable
     catch (Exception ex)
     {
         _logger.LogError(ex, "Failed to ensure network {Network} exists", networkName);
+        throw;
+    }
+}
+public async Task EnsureRedisContainerRunningAsync()
+{
+    const string containerName = "redis_shared";
+    const string imageName = "redis:7-alpine";
+    const string networkName = "whatsapp_network";
+
+    try
+    {
+        // בדוק אם כבר רץ
+        var containers = await _client.Containers.ListContainersAsync(
+            new ContainersListParameters { All = true });
+
+        var existing = containers.FirstOrDefault(c =>
+            c.Names.Any(n => n.TrimStart('/') == containerName));
+
+        if (existing != null)
+        {
+            if (existing.State == "running")
+            {
+                _logger.LogInformation("Redis container already running");
+                return;
+            }
+
+            // קיים אבל לא רץ — הפעל אותו
+            await _client.Containers.StartContainerAsync(
+                existing.ID, new ContainerStartParameters());
+            _logger.LogInformation("Started existing Redis container");
+            return;
+        }
+
+        // משוך image אם צריך
+        await PullImageAsync(imageName);
+
+        // צור container חדש
+        var response = await _client.Containers.CreateContainerAsync(
+            new CreateContainerParameters
+            {
+                Image = imageName,
+                Name  = containerName,
+                HostConfig = new HostConfig
+                {
+                    RestartPolicy = new RestartPolicy { Name = RestartPolicyKind.UnlessStopped },
+                    Memory = 256 * 1024 * 1024,
+                }
+            });
+
+        await _client.Containers.StartContainerAsync(
+            response.ID, new ContainerStartParameters());
+
+        // חבר ל-network
+        await _client.Networks.ConnectNetworkAsync(networkName,
+            new NetworkConnectParameters { Container = response.ID });
+
+        _logger.LogInformation("Redis container created and started");
+    }
+    catch (Exception ex)
+    {
+        _logger.LogError(ex, "Failed to ensure Redis container");
         throw;
     }
 }
