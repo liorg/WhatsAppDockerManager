@@ -29,12 +29,12 @@ builder.Services.Configure<AppSettings>(builder.Configuration.GetSection("AppSet
 builder.Services.AddSingleton<ISupabaseService, SupabaseService>();
 builder.Services.AddSingleton<IDockerService, DockerService>();
 builder.Services.AddSingleton<IContainerManager, ContainerManager>();
+builder.Services.AddSingleton<OrphanContainerCleanupService>();
 
 // HTTP Client Factory for outgoing requests
 builder.Services.AddHttpClient();
 
 // Controllers
-//builder.Services.AddControllers();
 builder.Services.AddControllers()
     .AddJsonOptions(options =>
     {
@@ -92,6 +92,10 @@ var app = builder.Build();
 var containerManager = app.Services.GetRequiredService<IContainerManager>();
 await containerManager.InitializeAsync();
 
+// Orphan cleanup — אחרי initialize, כשה-HostId כבר ידוע
+var orphanCleanup = app.Services.GetRequiredService<OrphanContainerCleanupService>();
+await orphanCleanup.RunCleanupAsync();
+
 // Configure pipeline
 app.UseSwagger();
 app.UseSwaggerUI();
@@ -103,29 +107,26 @@ app.MapControllers();
 
 // Health check endpoint
 app.MapGet("/health", () => Results.Ok(new { status = "healthy", timestamp = DateTime.UtcNow }));
+
 app.MapGet("/version", () =>
 {
     var assembly = Assembly.GetExecutingAssembly();
 
-    var version =
+    var rawVersion =
         assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()
             ?.InformationalVersion
         ?? assembly.GetName().Version?.ToString()
         ?? "unknown";
-var rawVersion =
-    assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()
-        ?.InformationalVersion
-    ?? assembly.GetName().Version?.ToString()
-    ?? "unknown";
 
-var cleanVersion = rawVersion.Split('+')[0];
- return Results.Ok(new
-{
-    app = "WhatsAppDockerManager",
-    version = cleanVersion,
-    fullVersion = rawVersion
+    var cleanVersion = rawVersion.Split('+')[0];
+    return Results.Ok(new
+    {
+        app = "WhatsAppDockerManager",
+        version = cleanVersion,
+        fullVersion = rawVersion
+    });
 });
-});
+
 Log.Information("WhatsApp Docker Manager starting on {Urls}", builder.Configuration["Urls"] ?? "http://localhost:5000");
 
 try

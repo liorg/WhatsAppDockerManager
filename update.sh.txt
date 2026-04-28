@@ -76,7 +76,7 @@ if [ -z "$ZIP_URL" ]; then
 fi
 
 TARGET_DIR="$RELEASES_DIR/$LATEST_TAG"
-TMP_ZIP="/tmp/$APP_NAME-$LATEST_TAG.zip"
+TMP_ZIP=$(mktemp "/tmp/${APP_NAME}-${LATEST_TAG}.XXXXXX.zip")
 
 echo "Downloading $ZIP_URL"
 curl -L -o "$TMP_ZIP" "$ZIP_URL"
