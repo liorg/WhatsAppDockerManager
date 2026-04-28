@@ -7944,7 +7944,7 @@
     "/home/lior/.nuget/packages/": {}
   },
   "project": {
-    "version": "1.0.8",
+    "version": "1.0.9",
     "restore": {
       "projectUniqueName": "/home/lior/projects/github/WhatsAppDockerManager/src/WhatsAppDockerManager/WhatsAppDockerManager.csproj",
       "projectName": "WhatsAppDockerManager",
