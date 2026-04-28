@@ -58,7 +58,7 @@ curl -X POST http://localhost:5000/api/phones/provision \
 
 sudo docker rm -f whatsapp_97254625291
 
-<pre>/opt/whatsapp-data/auth_972546252291
+
 
 sudo rm /opt/whatsapp-data/auth_972546252291/creds.json
 
@@ -66,5 +66,7 @@ sudo rm /opt/whatsapp-data/auth_972546252291/creds.json
 ls /opt/whatsapp-data/auth_972546252291/
 
 
-<pre> journalctl -u whatsapp-manager -n 50
-</pre>
+journalctl -u whatsapp-manager -n 50
+
+## בדוק את התמונה של הקונטיינר
+docker inspect whatsapp_972504476645 | grep Image
