@@ -71,3 +71,4 @@
 /home/lior/projects/github/WhatsAppDockerManager/src/WhatsAppDockerManager/bin/Debug/net8.0/publish/publish/appsettings.json
 /home/lior/projects/github/WhatsAppDockerManager/src/WhatsAppDockerManager/bin/Debug/net8.0/publish/publish/WhatsAppDockerManager.deps.json
 /home/lior/projects/github/WhatsAppDockerManager/src/WhatsAppDockerManager/bin/Debug/net8.0/publish/publish/WhatsAppDockerManager.runtimeconfig.json
+/home/lior/projects/github/WhatsAppDockerManager/src/WhatsAppDockerManager/bin/Debug/net8.0/PhoneNumbers.dll

@@ -72,6 +72,19 @@
           }
         }
       },
+      "libphonenumber-csharp/9.0.29": {
+        "type": "package",
+        "compile": {
+          "lib/net8.0/PhoneNumbers.dll": {
+            "related": ".xml"
+          }
+        },
+        "runtime": {
+          "lib/net8.0/PhoneNumbers.dll": {
+            "related": ".xml"
+          }
+        }
+      },
       "Microsoft.Extensions.ApiDescription.Server/8.0.0": {
         "type": "package",
         "build": {
@@ -2722,6 +2735,25 @@
         "icon.png",
         "lib/netstandard2.0/Supabase.Gotrue.dll",
         "lib/netstandard2.0/Supabase.Gotrue.xml"
+      ]
+    },
+    "libphonenumber-csharp/9.0.29": {
+      "sha512": "Z6FqHRx0gpHYr+EpW5heEadCSh9VnXJHUScPGEDCrpPLHxkB2mccUZfz+FDo+9yMF1Bxz7RBVMFL4MgV6eYoRA==",
+      "type": "package",
+      "path": "libphonenumber-csharp/9.0.29",
+      "files": [
+        ".nupkg.metadata",
+        ".signature.p7s",
+        "README.md",
+        "icon.png",
+        "lib/net8.0/PhoneNumbers.dll",
+        "lib/net8.0/PhoneNumbers.xml",
+        "lib/net9.0/PhoneNumbers.dll",
+        "lib/net9.0/PhoneNumbers.xml",
+        "lib/netstandard2.0/PhoneNumbers.dll",
+        "lib/netstandard2.0/PhoneNumbers.xml",
+        "libphonenumber-csharp.9.0.29.nupkg.sha512",
+        "libphonenumber-csharp.nuspec"
       ]
     },
     "Microsoft.Extensions.ApiDescription.Server/8.0.0": {
@@ -7937,6 +7969,7 @@
       "Supabase >= 1.1.1",
       "Supabase.Postgrest >= 4.1.0",
       "Swashbuckle.AspNetCore >= 10.1.7",
+      "libphonenumber-csharp >= 9.0.29",
       "supabase-csharp >= 0.16.2"
     ]
   },
@@ -7944,7 +7977,7 @@
     "/home/lior/.nuget/packages/": {}
   },
   "project": {
-    "version": "1.0.12",
+    "version": "1.0.14",
     "restore": {
       "projectUniqueName": "/home/lior/projects/github/WhatsAppDockerManager/src/WhatsAppDockerManager/WhatsAppDockerManager.csproj",
       "projectName": "WhatsAppDockerManager",
@@ -8012,6 +8045,10 @@
           "Swashbuckle.AspNetCore": {
             "target": "Package",
             "version": "[10.1.7, )"
+          },
+          "libphonenumber-csharp": {
+            "target": "Package",
+            "version": "[9.0.29, )"
           },
           "supabase-csharp": {
             "target": "Package",

@@ -5,13 +5,14 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>WhatsAppDockerManager</RootNamespace>
-    <Version>1.0.12</Version>
+    <Version>1.0.14</Version>
   </PropertyGroup>
 
   <ItemGroup>
     <!-- Docker API -->
     <PackageReference Include="Docker.DotNet" Version="3.125.15" />
     <PackageReference Include="DotNetEnv" Version="3.1.1" />
+    <PackageReference Include="libphonenumber-csharp" Version="9.0.29" />
     <PackageReference Include="Supabase" Version="1.1.1" />
     <PackageReference Include="supabase-csharp" Version="0.16.2" />
     <PackageReference Include="Supabase.Postgrest" Version="4.1.0" />
