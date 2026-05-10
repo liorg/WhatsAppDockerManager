@@ -947,7 +947,7 @@ public async Task ClearPhoneForLogoutAsync(Guid phoneId)
 {
     var phone = await GetPhoneByIdAsync(phoneId);
     if (phone == null) return;
-
+    phone.Status = "disconnected";
     phone.DockerStatus = PhoneDockerStatus.Pending;
     phone.ContainerId = null;
     phone.ContainerName = null;
