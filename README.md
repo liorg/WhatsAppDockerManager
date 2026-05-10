@@ -154,6 +154,14 @@ cp .env.example .env
 nano .env
 ```
 
+### 
+change version
+git add WhatsAppDockerManager.csproj
+git add Services
+git add Controllers
+git status
+git commit --m 'vers'
+ git push
 
 ### 2. הרצה
 ──────────────────────────────────────────
@@ -385,14 +393,41 @@ sudo systemctl enable whatsapp-manager
 sudo systemctl start whatsapp-manager
 
 # ── בדיקה 
+
+docker ps
+
+
 sudo systemctl status whatsapp-manager
 journalctl -u whatsapp-manager -f
 journalctl -u whatsapp-manager -n 50
 
 docker logs whatsapp_972-XXXXXXX --tail 50
 
+docker inspect whatsapp_9725xxxxx| grep -A 20 Mounts
+
+## IMAGE 
+ gcloud compute images create whatsapp-server-stable-v1 \
+    --source-disk=instance-20260416-115407 \
+    --source-disk-zone=europe-central2-c \
+    --description="Stable image with WhatsApp Manager"
+
+gcloud compute addresses create my-static-ip \
+    --addresses=XX.XXX.XXX.XXX \
+    --region=europe-central2
+
+
 ## רישיון
 
 MIT
 
 
+## GIT
+update version  WhatsAppDockerManager.csproj
+git add WhatsAppDockerManager.csproj
+git add README.md
+git add Services
+git add Controllers
+git status
+git add Controllers
+git commit --m 'vers 18'
+git push 
