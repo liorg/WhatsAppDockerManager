@@ -32,11 +32,12 @@ public class PhonesController : ControllerBase
         _logger = logger;
     }
 
+
     /// <summary>
     /// Logout and delete auth files - for fresh QR scan
     /// </summary>
-    [HttpPost("{phoneId}/logout")]
-    public async Task<IActionResult> Logout(Guid phoneId)
+    [HttpPost("{phoneId}/logoutold")]
+    public async Task<IActionResult> logoutold(Guid phoneId)
     {
         var phone = await _supabaseService.GetPhoneByIdAsync(phoneId);
         if (phone == null)
@@ -80,6 +81,50 @@ public class PhonesController : ControllerBase
         }
     }
 
+    [HttpPost("{phoneId}/logout")]
+    public async Task<IActionResult> Logout(Guid phoneId)
+    {
+        var phone = await _supabaseService.GetPhoneByIdAsync(phoneId);
+        if (phone == null)
+            return NotFound(new { error = "Phone not found" });
+
+        try
+        {
+            if (!string.IsNullOrEmpty(phone.ContainerId))
+            {
+                await _dockerService.RemoveContainerAsync(phone.ContainerId);
+            }
+
+            var phoneIndex = phone.Number.Replace("+", "");
+            var basePath = _configuration["AppSettings:Docker:DataBasePath"] ?? "/opt/whatsapp-data";
+            var authPath = Path.Combine(basePath, $"auth_{phoneIndex}");
+
+            if (Directory.Exists(authPath))
+                Directory.Delete(authPath, recursive: true);
+
+            Directory.CreateDirectory(authPath);
+
+            await _supabaseService.ClearPhoneForLogoutAsync(phoneId);
+
+            var freshPhone = await _supabaseService.GetPhoneByIdAsync(phoneId);
+            if (freshPhone == null)
+                return NotFound(new { error = "Phone not found after update" });
+
+            await _containerManager.StartPhoneContainerAsync(freshPhone);
+
+            return Ok(new
+            {
+                success = true,
+                message = "Logged out. Get new QR.",
+                qrUrl = $"/api/phones/{phoneId}/qrcode"
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error during logout for phone {PhoneId}", phoneId);
+            return StatusCode(500, new { error = ex.Message });
+        }
+    }
     [HttpGet]
     public async Task<IActionResult> GetAllPhones()
     {

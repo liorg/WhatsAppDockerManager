@@ -63,6 +63,8 @@ public interface ISupabaseService
     Task UpdatePhoneUserIdAsync(Guid phoneId, Guid userId);
     
     Task DetachPhoneFromHostAsync(Guid phoneId);
+
+    Task ClearPhoneForLogoutAsync(Guid phoneId);
 }
 
 public class SupabaseService : ISupabaseService
@@ -941,6 +943,23 @@ public async Task<PingSender?> MatchPingSenderByLidAsync(Guid phoneId, string li
         return null;
     }
 } 
+public async Task ClearPhoneForLogoutAsync(Guid phoneId)
+{
+    var phone = await GetPhoneByIdAsync(phoneId);
+    if (phone == null) return;
+
+    phone.DockerStatus = PhoneDockerStatus.Pending;
+    phone.ContainerId = null;
+    phone.ContainerName = null;
+    phone.DockerUrl = null;
+    phone.ErrorMessage = null;
+    phone.CredsBase64 = null;
+    phone.LastHealthCheck = DateTime.UtcNow;
+
+    await _client.From<Phone>().Update(phone);
+
+    _logger.LogInformation("Cleared phone {PhoneId} for logout", phoneId);
+}
    
 #endregion
 }
