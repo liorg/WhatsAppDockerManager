@@ -405,10 +405,17 @@ public async Task UpdatePhoneUserIdAsync(Guid phoneId, Guid userId)
     }
 
     public async Task UpdatePhoneDockerStatusAsync(Guid phoneId, string status, string? containerId = null, string? containerName = null, int? apiPort = null, int? wsPort = null, string? dockerUrl = null, string? errorMessage = null)
-    {
+    {    _logger.LogWarning("ENTER UpdatePhoneDockerStatusAsync");
         try
-        {
+        {  
             var phone = await GetPhoneByIdAsync(phoneId);
+        if (phone == null)
+            {
+                _logger.LogError("PHONE NULL");
+                return;
+            }
+ _logger.LogWarning("PHONE FOUND");
+
             if (phone != null)
             {
                 phone.DockerStatus = status;
@@ -427,12 +434,14 @@ public async Task UpdatePhoneUserIdAsync(Guid phoneId, Guid userId)
                 }
 
                 await _client.From<Phone>().Update(phone);
+                  _logger.LogWarning("UPDATE DONE");
                 _logger.LogDebug("Updated phone {PhoneId} docker status to {Status}", phoneId, status);
             }
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error updating phone {PhoneId} docker status", phoneId);
+               throw;
         }
     }
 
