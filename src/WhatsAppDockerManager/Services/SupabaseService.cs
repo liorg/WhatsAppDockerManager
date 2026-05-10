@@ -364,10 +364,13 @@ public async Task UpdatePhoneUserIdAsync(Guid phoneId, Guid userId)
     {
         try
         {
+            var clean = new string(phoneNumber.Where(char.IsDigit).ToArray());
+
             var response = await _client.From<Phone>()
-                .Where(p => p.Number == phoneNumber)
-                .Get();
-            return response.Models.FirstOrDefault();
+            .Where(p => p.Number == clean || p.Number == "+" + clean)
+            .Get();
+
+           return response.Models.FirstOrDefault();
         }
         catch (Exception ex)
         {
