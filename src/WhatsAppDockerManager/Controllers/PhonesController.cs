@@ -32,6 +32,46 @@ public class PhonesController : ControllerBase
         _logger = logger;
     }
 
+    /// <summary>
+    /// Send a text message to a WhatsApp JID (number or LID)
+    /// </summary>
+    [HttpPost("{phoneId}/send/text")]
+    public async Task<IActionResult> SendText(Guid phoneId, [FromBody] SendTextRequest request)
+    {
+        if (string.IsNullOrEmpty(request.Jid) || string.IsNullOrEmpty(request.Text))
+            return BadRequest(new { error = "jid and text are required" });
+
+        var phone = await _supabaseService.GetPhoneByIdAsync(phoneId);
+        if (phone == null)
+            return NotFound(new { error = "Phone not found" });
+
+        var (fastApiPort, _) = PortHashCalculator.GetBothPorts(phone.Number, _configuration);
+
+        try
+        {
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+            var response = await http.PostAsJsonAsync(
+                $"http://localhost:{fastApiPort}/send/text",
+                new { jid = request.Jid, text = request.Text }
+            );
+
+            if (!response.IsSuccessStatusCode)
+            {
+                var err = await response.Content.ReadAsStringAsync();
+                _logger.LogWarning("Baileys send/text failed: {Status} {Error}", response.StatusCode, err);
+                return StatusCode((int)response.StatusCode, new { error = err });
+            }
+
+            var result = await response.Content.ReadFromJsonAsync<object>();
+            _logger.LogInformation("Sent text to {Jid} via phone {PhoneId}", request.Jid, phoneId);
+            return Ok(result);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error sending text for phone {PhoneId}", phoneId);
+            return StatusCode(500, new { error = ex.Message });
+        }
+    }
 
     /// <summary>
     /// Logout and delete auth files - for fresh QR scan
@@ -45,13 +85,9 @@ public class PhonesController : ControllerBase
 
         try
         {
-            // 1. Stop container
             if (!string.IsNullOrEmpty(phone.ContainerId))
-            {
                 await _dockerService.StopContainerAsync(phone.ContainerId);
-            }
 
-            // 2. Delete auth files
             var phoneIndex = phone.Number.Replace("+", "");
             var authPath = Path.Combine(_configuration["AppSettings:Docker:DataBasePath"] ?? "/opt/whatsapp-data", $"auth_{phoneIndex}");
             
@@ -59,20 +95,12 @@ public class PhonesController : ControllerBase
             {
                 Directory.Delete(authPath, recursive: true);
                 Directory.CreateDirectory(authPath);
-                _logger.LogInformation("Deleted auth files at {Path}", authPath);
             }
 
-            // 3. Update status
             await _supabaseService.UpdatePhoneDockerStatusAsync(phoneId, PhoneDockerStatus.Pending);
-
-            // 4. Restart container
             await _containerManager.StartPhoneContainerAsync(phone);
 
-            return Ok(new { 
-                success = true, 
-                message = "Logged out. Wait 10 seconds then get new QR.",
-                qrUrl = $"/api/phones/{phoneId}/qrcode"
-            });
+            return Ok(new { success = true, message = "Logged out. Wait 10 seconds then get new QR.", qrUrl = $"/api/phones/{phoneId}/qrcode" });
         }
         catch (Exception ex)
         {
@@ -91,9 +119,7 @@ public class PhonesController : ControllerBase
         try
         {
             if (!string.IsNullOrEmpty(phone.ContainerId))
-            {
                 await _dockerService.RemoveContainerAsync(phone.ContainerId);
-            }
 
             var phoneIndex = phone.Number.Replace("+", "");
             var basePath = _configuration["AppSettings:Docker:DataBasePath"] ?? "/opt/whatsapp-data";
@@ -101,7 +127,6 @@ public class PhonesController : ControllerBase
 
             if (Directory.Exists(authPath))
                 Directory.Delete(authPath, recursive: true);
-
             Directory.CreateDirectory(authPath);
 
             await _supabaseService.ClearPhoneForLogoutAsync(phoneId);
@@ -112,12 +137,7 @@ public class PhonesController : ControllerBase
 
             await _containerManager.StartPhoneContainerAsync(freshPhone);
 
-            return Ok(new
-            {
-                success = true,
-                message = "Logged out. Get new QR.",
-                qrUrl = $"/api/phones/{phoneId}/qrcode"
-            });
+            return Ok(new { success = true, message = "Logged out. Get new QR.", qrUrl = $"/api/phones/{phoneId}/qrcode" });
         }
         catch (Exception ex)
         {
@@ -125,6 +145,7 @@ public class PhonesController : ControllerBase
             return StatusCode(500, new { error = ex.Message });
         }
     }
+
     [HttpGet]
     public async Task<IActionResult> GetAllPhones()
     {
@@ -132,14 +153,7 @@ public class PhonesController : ControllerBase
         return Ok(new
         {
             count = phones.Count,
-            phones = phones.Select(p => new
-            {
-                id = p.Id,
-                number = p.Number,
-                label = p.Label,
-                dockerStatus = p.DockerStatus,
-                apiPort = p.ApiPort
-            })
+            phones = phones.Select(p => new { id = p.Id, number = p.Number, label = p.Label, dockerStatus = p.DockerStatus, apiPort = p.ApiPort })
         });
     }
 
@@ -150,57 +164,41 @@ public class PhonesController : ControllerBase
         if (phone == null)
             return NotFound(new { error = "Phone not found" });
 
-        return Ok(new
-        {
-            id = phone.Id,
-            number = phone.Number,
-            label = phone.Label,
-            dockerStatus = phone.DockerStatus,
-            apiPort = phone.ApiPort,
-            lastHealthCheck = phone.LastHealthCheck
-        });
+        return Ok(new { id = phone.Id, number = phone.Number, label = phone.Label, dockerStatus = phone.DockerStatus, apiPort = phone.ApiPort, lastHealthCheck = phone.LastHealthCheck });
     }
 
-    /// <summary>
-    /// Provision a phone - create record + start container + return QR or connected status
-    /// </summary>
     [HttpPost("provision")]
     public async Task<IActionResult> Provision([FromBody] ProvisionRequest request)
     {
         if (string.IsNullOrWhiteSpace(request.PhoneNumber))
             return BadRequest(new { error = "phoneNumber is required" });
 
-        // ── Validate phone number ─────────────────────────────────────────────
         var (isValid, validationError, normalizedPhone) = ValidateAndNormalizePhone(request.PhoneNumber);
         if (!isValid)
             return BadRequest(new { error = validationError });
 
         var fastApiPort = PortHashCalculator.GetFastApiPort(normalizedPhone!, _configuration);
-
         _logger.LogInformation("Provision request: {Phone} → Port:{Port}", normalizedPhone, fastApiPort);
 
-        // Check if phone exists in DB
         var existingPhone = await _supabaseService.GetPhoneByNumberAsync(normalizedPhone!);
 
         Phone phone;
         if (existingPhone != null)
         {
             phone = existingPhone;
-            _logger.LogInformation("Phone {Phone} already exists in DB", normalizedPhone);
         }
         else
         {
             phone = await _supabaseService.CreatePhoneAsync(new Phone
             {
                 Id = Guid.NewGuid(),
-                Number = normalizedPhone!,  // ← ללא +
+                Number = normalizedPhone!,
                 Label = request.Nickname,
                 Color = request.Tag,
                 Status = "active",
                 DockerStatus = PhoneDockerStatus.Pending,
                 ApiPort = fastApiPort,
             });
-            _logger.LogInformation("Created new phone record for {Phone}", normalizedPhone);
         }
 
         if (request.UserId.HasValue && phone.UserId != request.UserId)
@@ -209,61 +207,26 @@ public class PhonesController : ControllerBase
             phone.UserId = request.UserId.Value;
         }
 
-        // Check if container is running
         var containerRunning = !string.IsNullOrEmpty(phone.ContainerId)
             && await _dockerService.IsContainerRunningAsync(phone.ContainerId);
 
         if (!containerRunning)
         {
-            _logger.LogInformation("Container not running for {Phone}, starting...", normalizedPhone);
             var started = await _containerManager.StartPhoneContainerAsync(phone);
-
             if (!started)
                 return StatusCode(500, new { error = "Failed to start container" });
-
             await Task.Delay(3000);
         }
 
-        // Check connection status
         var waStatus = await GetContainerStatus(fastApiPort);
 
         if (waStatus == "connected")
-        {
-            return Ok(new ProvisionResponse
-            {
-                PhoneId = phone.Id,
-                PhoneNumber = normalizedPhone!,
-                Label = phone.Label,
-                Color = phone.Color,
-                Port = fastApiPort,
-                Status = "connected",
-                QrCode = null,
-                QrImageBase64 = null,
-                Message = "Phone is already connected"
-            });
-        }
+            return Ok(new ProvisionResponse { PhoneId = phone.Id, PhoneNumber = normalizedPhone!, Label = phone.Label, Color = phone.Color, Port = fastApiPort, Status = "connected", Message = "Phone is already connected" });
 
-        // Get QR
         var qrData = await GetContainerQr(fastApiPort);
-
-        return Ok(new ProvisionResponse
-        {
-            PhoneId = phone.Id,
-            PhoneNumber = normalizedPhone!,
-            Label = phone.Label,
-            Color = phone.Color,
-            Port = fastApiPort,
-            Status = "qr_ready",
-            QrCode = qrData?.Qr,
-            QrImageBase64 = qrData?.QrImageBase64,
-            QrRefreshUrl = $"/api/phones/{phone.Id}/qrcode",
-            Message = "Scan the QR code to connect"
-        });
+        return Ok(new ProvisionResponse { PhoneId = phone.Id, PhoneNumber = normalizedPhone!, Label = phone.Label, Color = phone.Color, Port = fastApiPort, Status = "qr_ready", QrCode = qrData?.Qr, QrImageBase64 = qrData?.QrImageBase64, QrRefreshUrl = $"/api/phones/{phone.Id}/qrcode", Message = "Scan the QR code to connect" });
     }
 
-    /// <summary>
-    /// Get QR code for a phone (refresh endpoint)
-    /// </summary>
     [HttpGet("{id:guid}/qrcode")]
     public async Task<IActionResult> GetQrCode(Guid id)
     {
@@ -281,77 +244,47 @@ public class PhonesController : ControllerBase
         if (qrData == null)
             return StatusCode(503, new { error = "Container not ready yet", status = waStatus });
 
-        return Ok(new
-        {
-            status = "qr_ready",
-            qr = qrData.Qr,
-            qrImageBase64 = qrData.QrImageBase64,
-        });
+        return Ok(new { status = "qr_ready", qr = qrData.Qr, qrImageBase64 = qrData.QrImageBase64 });
     }
 
-    /// <summary>
-    /// Get QR code as PNG image
-    /// </summary>
     [HttpGet("{id:guid}/qrcode/image")]
     public async Task<IActionResult> GetQrCodeImage(Guid id)
     {
         var phone = await _supabaseService.GetPhoneByIdAsync(id);
-        if (phone == null)
-            return NotFound();
+        if (phone == null) return NotFound();
 
         var (fastApiPort, _) = PortHashCalculator.GetBothPorts(phone.Number, _configuration);
-
         using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
         try
         {
             var bytes = await http.GetByteArrayAsync($"http://localhost:{fastApiPort}/qrcode/image");
             return File(bytes, "image/png");
         }
-        catch
-        {
-            return StatusCode(503, new { error = "QR not available yet" });
-        }
+        catch { return StatusCode(503, new { error = "QR not available yet" }); }
     }
 
-    /// <summary>
-    /// Pause phone — stop + remove container + delete logs. Creds preserved for resume.
-    /// </summary>
     [HttpPost("{phoneId}/pause")]
     public async Task<IActionResult> Pause(Guid phoneId)
     {
         var phone = await _supabaseService.GetPhoneByIdAsync(phoneId);
-        if (phone == null)
-            return NotFound(new { error = "Phone not found" });
+        if (phone == null) return NotFound(new { error = "Phone not found" });
 
         var success = await _containerManager.PausePhoneContainerAsync(phone);
+        if (!success) return StatusCode(500, new { error = "Failed to pause phone" });
 
-        if (!success)
-            return StatusCode(500, new { error = "Failed to pause phone" });
-
-        return Ok(new
-        {
-            success = true,
-            message = "Phone paused. Container removed, logs cleared. Creds preserved — use /provision to resume.",
-            resumeUrl = $"/api/phones/{phoneId}/resume"
-        });
+        return Ok(new { success = true, message = "Phone paused.", resumeUrl = $"/api/phones/{phoneId}/resume" });
     }
 
-    /// <summary>
-    /// Resume a paused phone — restart container using saved creds (no QR needed if creds exist)
-    /// </summary>
     [HttpPost("{phoneId}/resume")]
     public async Task<IActionResult> Resume(Guid phoneId)
     {
         var phone = await _supabaseService.GetPhoneByIdAsync(phoneId);
-        if (phone == null)
-            return NotFound(new { error = "Phone not found" });
+        if (phone == null) return NotFound(new { error = "Phone not found" });
 
         var started = await _containerManager.StartPhoneContainerAsync(phone);
-        if (!started)
-            return StatusCode(500, new { error = "Failed to resume phone" });
+        if (!started) return StatusCode(500, new { error = "Failed to resume phone" });
 
         await Task.Delay(3000);
-
         var (fastApiPort, _) = PortHashCalculator.GetBothPorts(phone.Number, _configuration);
         var waStatus = await GetContainerStatus(fastApiPort);
 
@@ -359,52 +292,27 @@ public class PhonesController : ControllerBase
             return Ok(new { success = true, status = "connected", message = "Phone resumed and connected" });
 
         var qrData = await GetContainerQr(fastApiPort);
-        return Ok(new
-        {
-            success = true,
-            status = "qr_ready",
-            message = "Phone resumed — scan QR to reconnect",
-            qr = qrData?.Qr,
-            qrImageBase64 = qrData?.QrImageBase64,
-            qrRefreshUrl = $"/api/phones/{phoneId}/qrcode"
-        });
+        return Ok(new { success = true, status = "qr_ready", message = "Phone resumed — scan QR to reconnect", qr = qrData?.Qr, qrImageBase64 = qrData?.QrImageBase64, qrRefreshUrl = $"/api/phones/{phoneId}/qrcode" });
     }
 
     // ── Private helpers ───────────────────────────────────────────────────────
 
-    /// <summary>
-    /// Validate and normalize phone number using libphonenumber.
-    /// Returns digits only (no +) for DB storage.
-    /// </summary>
     private static (bool isValid, string? error, string? normalized) ValidateAndNormalizePhone(string phone)
     {
         try
         {
             var digits = new string(phone.Where(char.IsDigit).ToArray());
+            if (digits.Length < 7 || digits.Length > 15) return (false, "Phone number must be between 7 and 15 digits", null);
+            if (digits.StartsWith("0")) return (false, "Phone number must include country code without leading 0", null);
+            if (digits.Distinct().Count() == 1) return (false, "Invalid phone number", null);
 
-            if (digits.Length < 7 || digits.Length > 15)
-                return (false, "Phone number must be between 7 and 15 digits", null);
-
-            if (digits.StartsWith("0"))
-                return (false, "Phone number must include country code without leading 0 (e.g. 972504476645)", null);
-
-            if (digits.Distinct().Count() == 1)
-                return (false, "Invalid phone number", null);
-
-            // ── libphonenumber validation ─────────────────────────────────────
             var phoneUtil = PhoneNumberUtil.GetInstance();
             var parsed = phoneUtil.Parse("+" + digits, null);
+            if (!phoneUtil.IsValidNumber(parsed)) return (false, $"Invalid phone number for region {phoneUtil.GetRegionCodeForNumber(parsed)}", null);
 
-            if (!phoneUtil.IsValidNumber(parsed))
-                return (false, $"Invalid phone number for region {phoneUtil.GetRegionCodeForNumber(parsed)}", null);
-
-            // ← מחזיר ללא + לשמירה ב-DB
             return (true, null, digits);
         }
-        catch (NumberParseException)
-        {
-            return (false, "Could not parse phone number — include country code (e.g. 972504476645)", null);
-        }
+        catch (NumberParseException) { return (false, "Could not parse phone number — include country code", null); }
     }
 
     private async Task<string> GetContainerStatus(int fastApiPort)
@@ -427,9 +335,6 @@ public class PhonesController : ControllerBase
         }
         catch { return null; }
     }
-
-    private static string NormalizePhone(string phone)
-        => new string(phone.Where(char.IsDigit).ToArray()); // ← ללא +
 }
 
 // DTOs
@@ -453,6 +358,12 @@ public record ProvisionResponse
     public string? QrImageBase64 { get; init; }
     public string? QrRefreshUrl { get; init; }
     public string Message { get; init; } = "";
+}
+
+public record SendTextRequest
+{
+    public string Jid  { get; init; } = "";
+    public string Text { get; init; } = "";
 }
 
 record ContainerStatusResponse(string Status);
