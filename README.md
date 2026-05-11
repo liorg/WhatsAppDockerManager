@@ -404,6 +404,7 @@ journalctl -u whatsapp-manager.service -f --no-pager | grep -E "MSG-RAW|MSG\]|LI
 
 journalctl -u whatsapp-manager.service -f --no-pager | grep -E "MSG\]|ping_sender|Saved message|Created new|Found existing|matched via|LID-JID"
 
+journalctl -u whatsapp-manager.service -f --no-pager | grep -E "MSG-RAW|Duplicate|Error|error|Exception"
 docker logs whatsapp_972-XXXXXXX --tail 50
 
 docker inspect whatsapp_9725xxxxx| grep -A 20 Mounts
