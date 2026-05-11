@@ -359,12 +359,5 @@ public record ProvisionResponse
     public string? QrRefreshUrl { get; init; }
     public string Message { get; init; } = "";
 }
-
-public record SendTextRequest
-{
-    public string Jid  { get; init; } = "";
-    public string Text { get; init; } = "";
-}
-
 record ContainerStatusResponse(string Status);
 record ContainerQrResponse(string? Qr, string? QrImageBase64, string? Status);
