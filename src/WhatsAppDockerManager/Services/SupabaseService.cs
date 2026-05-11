@@ -37,6 +37,7 @@ public interface ISupabaseService
     Task<Contact> UpdateContactAsync(Contact contact);
     Task<Contact> GetOrCreateContactAsync(Guid phoneId, string contactNumber, string? name = null);
     Task<Contact> UpsertContactAsync(Guid phoneId, string contactNumber, string? name = null, string? lid = null);
+    Task<Contact> CreateDraftContactAsync(Guid phoneId, string contactNumber, string? lid = null, string? name = null);
 
     // Message operations
     Task<Message?> GetMessageByIdAsync(Guid messageId);
@@ -61,7 +62,7 @@ public interface ISupabaseService
     Task<PingSender> CreatePingSenderAsync(Guid phoneId, string targetNumber, string? pingMessageId);
     Task<PingSender?> GetPendingPingSenderAsync(Guid phoneId, string targetNumber);
     Task<PingSender?> GetLatestPendingPingSenderAsync(Guid phoneId);
- 
+    Task<PingSender?> GetLatestPendingPingSenderAsync(Guid phoneId);
     Task<PingSender?> MatchPingSenderByLidAsync(Guid phoneId, string lid, Guid contactId);
     Task UpdatePhoneUserIdAsync(Guid phoneId, Guid userId);
     
@@ -673,6 +674,34 @@ public async Task UpdatePhoneUserIdAsync(Guid phoneId, Guid userId)
             Name = name,
             Lid = lid,
             IsConnect = true
+        });
+    }
+
+    public async Task<Contact> CreateDraftContactAsync(Guid phoneId, string contactNumber, string? lid = null, string? name = null)
+    {
+        // בדוק אם כבר קיים (מניעת כפילות)
+        var existing = await GetContactByNumberAsync(phoneId, contactNumber);
+        if (existing != null)
+        {
+            // עדכן LID אם חסר
+            if (string.IsNullOrEmpty(existing.Lid) && !string.IsNullOrEmpty(lid))
+            {
+                existing.Lid = lid;
+                if (!string.IsNullOrEmpty(name) && string.IsNullOrEmpty(existing.Name))
+                    existing.Name = name;
+                return await UpdateContactAsync(existing);
+            }
+            return existing;
+        }
+
+        return await CreateContactAsync(new Contact
+        {
+            PhoneId   = phoneId,
+            Number    = contactNumber,
+            Lid       = lid,
+            Name      = name ?? contactNumber, // pushName או המספר כ-fallback
+            Tag       = "draft",              // ← ממתין לזיהוי ע"י המשתמש
+            IsConnect = false,
         });
     }
 
