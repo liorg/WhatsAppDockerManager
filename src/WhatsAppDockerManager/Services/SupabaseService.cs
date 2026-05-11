@@ -63,7 +63,7 @@ public interface ISupabaseService
     Task<PingSender> CreatePingSenderAsync(Guid phoneId, string targetNumber, string? pingMessageId);
     Task<PingSender?> GetPendingPingSenderAsync(Guid phoneId, string targetNumber);
     Task<PingSender?> GetLatestPendingPingSenderAsync(Guid phoneId);
-    Task<PingSender?> GetLatestPendingPingSenderAsync(Guid phoneId);
+
     Task<PingSender?> MatchPingSenderByLidAsync(Guid phoneId, string lid, Guid contactId);
     Task UpdatePhoneUserIdAsync(Guid phoneId, Guid userId);
     
