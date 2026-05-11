@@ -421,6 +421,9 @@ gcloud compute addresses create my-static-ip \
 MIT
 
 
+##
+journalctl -u whatsapp-manager.service   -f --no-pager | grep "MSG-RAW"
+
 ## GIT
 update version  WhatsAppDockerManager.csproj
 git add WhatsAppDockerManager.csproj
