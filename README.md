@@ -348,10 +348,6 @@ rm -rf ./logs/*
 
 # ── נקה טבלאות Supabase
 # הרץ ב-Supabase SQL Editor:
- TRUNCATE TABLE phones RESTART IDENTITY CASCADE;
- TRUNCATE TABLE agent_hosts RESTART IDENTITY CASCADE;
- TRUNCATE TABLE agent_events RESTART IDENTITY CASCADE;
- TRUNCATE TABLE contact_log RESTART IDENTITY CASCADE;
 
 
 # בדוק שהכל נקי
@@ -402,6 +398,12 @@ sudo systemctl status whatsapp-manager
 journalctl -u whatsapp-manager -f
 journalctl -u whatsapp-manager -n 50
 
+journalctl -u whatsapp-manager.service   -f --no-pager | grep "MSG-RAW"
+
+journalctl -u whatsapp-manager.service -f --no-pager | grep -E "MSG-RAW|MSG\]|LID|Contact|PING|error|Error"
+
+journalctl -u whatsapp-manager.service -f --no-pager | grep -E "MSG\]|ping_sender|Saved message|Created new|Found existing|matched via|LID-JID"
+
 docker logs whatsapp_972-XXXXXXX --tail 50
 
 docker inspect whatsapp_9725xxxxx| grep -A 20 Mounts
@@ -422,8 +424,9 @@ gcloud compute addresses create my-static-ip \
 MIT
 
 
+## RUNNING CRONLAB
+sudo /opt/myapp/update.sh
 ##
-journalctl -u whatsapp-manager.service   -f --no-pager | grep "MSG-RAW"
 
 ## GIT
 update version  WhatsAppDockerManager.csproj
