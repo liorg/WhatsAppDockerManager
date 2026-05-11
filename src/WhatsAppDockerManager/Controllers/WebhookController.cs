@@ -163,36 +163,36 @@ public class WebhookController : ControllerBase
 
             if (isLidJid)
             {
-                // JID הוא LID — ה-number לא מגיע בכלל מ-WhatsApp
-                contactLid = jidLocal; // ה-LID ללא @lid
+                // JID הוא LID — ה-number לא מגיע מ-WhatsApp
+                contactLid = jidLocal;
 
-                // חפש contact לפי LID תחת ה-phone הנוכחי
+                // שלב 1: חפש לפי LID (אם כבר קושר בעבר)
                 var existingByLid = await _supabaseService.GetContactByLidAsync(phoneId, jidLocal);
-
                 if (existingByLid != null)
                 {
-                    // מצאנו תחת ה-phone הנוכחי
                     contactNumber = existingByLid.Number;
-                    _logger.LogInformation("[MSG] LID-JID: matched contact {ContactId} number={Number} on phone {PhoneId}",
-                        existingByLid.Id, contactNumber, phoneId);
+                    _logger.LogInformation("[MSG] LID-JID: found by LID contact={ContactId} number={Number}",
+                        existingByLid.Id, contactNumber);
                 }
                 else
                 {
-                    // לא נמצא תחת ה-phone הנוכחי —
-                    // ייתכן שה-contact נוצר תחת phone אחר (כשיש כמה containers לאותו לקוח)
-                    // במקרה זה: שמור רק הודעה, אל תיצור contact כפול
-                    _logger.LogWarning("[MSG] LID-JID {Lid}: no contact found under phone {PhoneId} — message will be saved to existing contact if found globally, otherwise skipped",
-                        jidLocal, phoneId);
-
-                    if (!string.IsNullOrEmpty(payloadNumber))
+                    // שלב 2: חפש ב-ping_sender — ה-PING נשלח למספר ספציפי,
+                    // ה-contact נוצר עם אותו מספר אבל lid=null עדיין
+                    var pingSender = await _supabaseService.GetLatestPendingPingSenderAsync(phoneId);
+                    
+                    if (pingSender != null && !string.IsNullOrEmpty(pingSender.TargetNumber))
+                    {
+                        contactNumber = pingSender.TargetNumber;
+                        _logger.LogInformation("[MSG] LID-JID: matched via ping_sender number={Number}", contactNumber);
+                    }
+                    else if (!string.IsNullOrEmpty(payloadNumber))
                     {
                         contactNumber = payloadNumber;
                         _logger.LogInformation("[MSG] LID-JID: using payloadNumber={Number}", contactNumber);
                     }
                     else
                     {
-                        // אין מספר בכלל — דלג, אל תיצור contact עם LID כ-number
-                        _logger.LogWarning("[MSG] LID-JID {Lid}: skipping — no number available", jidLocal);
+                        _logger.LogWarning("[MSG] LID-JID {Lid}: no contact, no ping_sender, no number — skipping", jidLocal);
                         return;
                     }
                 }
