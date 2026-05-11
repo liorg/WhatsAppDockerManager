@@ -341,7 +341,8 @@ docker ps -a --filter "label=app=whatsapp-manager" --format "{{.ID}}" | xargs -r
 
 # ── מחק נתונים 
 sudo rm -rf /opt/whatsapp-data/*
-
+# ראה את כל ה-containers הרצים
+docker ps --format "table {{.Names}}\t{{.ID}}\t{{.Status}}"
 # ── מחק לוגים 
 rm -rf ./logs/*
 
