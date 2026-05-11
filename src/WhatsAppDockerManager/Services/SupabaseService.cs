@@ -602,16 +602,28 @@ public async Task UpdatePhoneUserIdAsync(Guid phoneId, Guid userId)
         {
             bool needsUpdate = false;
             
+            // עדכן שם רק אם השתנה
             if (!string.IsNullOrEmpty(name) && existing.Name != name)
             {
                 existing.Name = name;
                 needsUpdate = true;
             }
             
-            if (!string.IsNullOrEmpty(lid) && existing.Lid != lid)
+            // ← עדכן LID רק אם:
+            //   1. LID חדש הגיע (לא ריק)
+            //   2. ה-contact עדיין אין לו LID (לא מקושר עדיין)
+            //   כלל: אם ה-contact כבר מקושר (lid קיים) — אל תדרוס!
+            if (!string.IsNullOrEmpty(lid) && string.IsNullOrEmpty(existing.Lid))
             {
                 existing.Lid = lid;
                 needsUpdate = true;
+                _logger.LogInformation("[UPSERT] Linking contact {ContactId} with LID {Lid}", existing.Id, lid);
+            }
+            else if (!string.IsNullOrEmpty(lid) && existing.Lid != lid)
+            {
+                // LID שונה מהקיים — לא דורסים, רק מתעדים
+                _logger.LogWarning("[UPSERT] Contact {ContactId} already has LID={ExistingLid}, ignoring new LID={NewLid}",
+                    existing.Id, existing.Lid, lid);
             }
             
             if (existing.IsConnect != true)
