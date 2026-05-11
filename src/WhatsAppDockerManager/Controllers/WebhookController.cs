@@ -5,10 +5,6 @@ using WhatsAppDockerManager.Services;
 
 namespace WhatsAppDockerManager.Controllers;
 
-/// <summary>
-/// Internal Webhook Controller - receives events from Docker containers
-/// The Agent registers itself as webhook in each container automatically.
-/// </summary>
 [ApiController]
 [Route("api/[controller]")]
 public class WebhookController : ControllerBase
@@ -31,7 +27,6 @@ public class WebhookController : ControllerBase
     public async Task<IActionResult> ContainerEvent(Guid phoneId, [FromBody] ContainerEventPayload payload)
     {
         _logger.LogInformation("Container event for phone {PhoneId}: {Event}", phoneId, payload.Event ?? "unknown");
-        _logger.LogDebug("Payload received: {@Payload}", payload);
 
         var phone = await _supabaseService.GetPhoneByIdAsync(phoneId);
         if (phone == null)
@@ -54,7 +49,6 @@ public class WebhookController : ControllerBase
                 break;
 
             case "message":
-                _logger.LogInformation("Phone {PhoneId} received message", phoneId);
                 await HandleIncomingMessage(phoneId, phone, payload);
                 break;
 
@@ -66,71 +60,59 @@ public class WebhookController : ControllerBase
         return Ok(new { received = true });
     }
 
-    /// <summary>
-    /// Handle authenticated event - save creds and update phone number
-    /// </summary>
     private async Task HandleAuthenticated(Guid phoneId, Phone phone, ContainerEventPayload payload)
     {
         _logger.LogInformation("Phone {PhoneId} authenticated as {Phone}", phoneId, payload.Phone);
-        
-        // Update status to running
+
         await _supabaseService.UpdatePhoneDockerStatusAsync(phoneId, PhoneDockerStatus.Running);
-        
-        // Update phone number if provided
+
         if (!string.IsNullOrEmpty(payload.Phone))
         {
             var normalizedPhone = "+" + payload.Phone.Replace("+", "");
             await _supabaseService.UpdatePhoneNumberAsync(phoneId, normalizedPhone);
         }
-        
-        // ── שמור creds_base64 ← הכי חשוב! ──────────────────────
+
         if (!string.IsNullOrEmpty(payload.CredsB64))
         {
             await _supabaseService.UpdatePhoneCredsAsync(phoneId, payload.CredsB64);
-            _logger.LogInformation("Saved creds_base64 for phone {PhoneId} (length: {Length})", 
-                phoneId, payload.CredsB64.Length);
-        }
-        else
-        {
-            _logger.LogWarning("authenticated event received but creds_b64 is empty for phone {PhoneId}", phoneId);
+            _logger.LogInformation("Saved creds_base64 for phone {PhoneId}", phoneId);
         }
     }
 
     /// <summary>
-    /// Handle incoming message - create contact if not exists and save message.
+    /// Handle incoming message.
     /// 
-    /// JID formats from WhatsApp:
-    ///   - "972504476645@s.whatsapp.net"  → regular number JID
-    ///   - "12345678901234567@lid"         → LID JID (new WhatsApp accounts)
-    ///
-    /// When JID is @lid format, we must look up the contact by LID, not by number.
-    /// The number arrives separately in payload.Data["number"] or payload.Data["verifiedBizName"].
+    /// עיקרון: שמור את כל ההודעות תמיד — גם אם לא מכירים את השולח.
+    /// המשתמש יזהה ויקשר בשלב 2 של הוויזארד.
+    /// 
+    /// JID formats:
+    ///   "972504476645@s.whatsapp.net" → number JID
+    ///   "46037871886515@lid"          → LID JID (WhatsApp חדש)
     /// </summary>
     private async Task HandleIncomingMessage(Guid phoneId, Phone phone, ContainerEventPayload payload)
     {
-        if (string.IsNullOrEmpty(payload.Jid)) 
+        if (string.IsNullOrEmpty(payload.Jid))
         {
-            _logger.LogWarning("Message received without JID for phone {PhoneId}", phoneId);
+            _logger.LogWarning("Message without JID for phone {PhoneId}", phoneId);
             return;
         }
 
         try
         {
             _logger.LogInformation("[MSG-RAW] Jid={Jid} Type={Type} Data={Data}",
-                payload.Jid,
-                payload.Type,
+                payload.Jid, payload.Type,
                 System.Text.Json.JsonSerializer.Serialize(payload.Data));
 
-            // ── Parse JID ────────────────────────────────────────────────────
-            var jidParts   = payload.Jid.Split('@');
-            var jidLocal   = jidParts[0];                              // number OR lid-value
-            var jidDomain  = jidParts.Length > 1 ? jidParts[1] : ""; // "s.whatsapp.net" or "lid"
+            // ── Parse JID ─────────────────────────────────────────────────
+            var jidParts  = payload.Jid.Split('@');
+            var jidLocal  = jidParts[0];
+            var jidDomain = jidParts.Length > 1 ? jidParts[1] : "";
+            bool isLidJid = jidDomain == "lid";
 
-            bool isLidJid  = jidDomain == "lid";
-
-            // ── Extract name, number, lid from payload.Data ───────────────────
+            // ── Extract from payload.Data ──────────────────────────────────
             string? contactName   = null;
-            string? payloadNumber = null; // מספר טלפון אמיתי אם קיים ב-data
+            string? payloadNumber = null;
+            string? rawLid        = null;
 
             if (payload.Data != null)
             {
@@ -138,193 +120,152 @@ public class WebhookController : ControllerBase
                     contactName = pushName?.ToString();
                 if (payload.Data.TryGetValue("number", out var num))
                     payloadNumber = num?.ToString()?.TrimStart('+');
+                if (payload.Data.TryGetValue("lid", out var lidVal))
+                    rawLid = lidVal?.ToString(); // e.g. "46037871886515@lid"
             }
 
-            // ── Determine contactNumber and contactLid ────────────────────────
-            // כלל: contactNumber = מספר טלפון בלבד (ספרות בלי @)
-            //       contactLid    = ה-LID האמיתי של הלקוח (מה-JID כש@lid, או מה-sender)
-            string  contactNumber;
-            string? contactLid;
-
-            // ── fromMe ────────────────────────────────────────────────────────
+            // ── fromMe ────────────────────────────────────────────────────
             bool isIncoming = true;
             if (payload.Data?.TryGetValue("fromMe", out var fromMe) == true)
             {
-                if (fromMe is System.Text.Json.JsonElement jsonElement)
-                    isIncoming = !jsonElement.GetBoolean();
+                if (fromMe is System.Text.Json.JsonElement je)
+                    isIncoming = !je.GetBoolean();
                 else
                     isIncoming = !Convert.ToBoolean(fromMe);
             }
 
-            // ── LID מה-data (כולל @lid suffix) ───────────────────────────────
-            string? rawLid = null;
-            if (payload.Data?.TryGetValue("lid", out var lidVal) == true)
-                rawLid = lidVal?.ToString(); // "46037871886515@lid"
+            // ── Resolve contactNumber + contactLid ────────────────────────
+            string  contactNumber;
+            string? contactLid;
 
             if (isLidJid)
             {
-                // JID הוא LID — ה-number לא מגיע מ-WhatsApp
-                contactLid = jidLocal;
+                contactLid = jidLocal; // ה-LID ללא @lid
 
-                // שלב 1: חפש לפי LID (אם כבר קושר בעבר)
-                var existingByLid = await _supabaseService.GetContactByLidAsync(phoneId, jidLocal);
-                if (existingByLid != null)
+                // חפש contact קיים לפי LID (כבר קושר בעבר)
+                var byLid = await _supabaseService.GetContactByLidAsync(phoneId, jidLocal);
+                if (byLid != null)
                 {
-                    contactNumber = existingByLid.Number;
-                    _logger.LogInformation("[MSG] LID-JID: found by LID contact={ContactId} number={Number}",
-                        existingByLid.Id, contactNumber);
+                    contactNumber = byLid.Number;
+                    _logger.LogInformation("[MSG] Found by LID: contact={Id} number={Number}", byLid.Id, contactNumber);
+                }
+                else if (!string.IsNullOrEmpty(payloadNumber))
+                {
+                    // יש מספר ב-data
+                    contactNumber = payloadNumber;
+                    _logger.LogInformation("[MSG] LID-JID using payloadNumber={Number}", contactNumber);
                 }
                 else
                 {
-                    // שלב 2: חפש ב-ping_sender — ה-PING נשלח למספר ספציפי,
-                    // ה-contact נוצר עם אותו מספר אבל lid=null עדיין
-                    var pingSender = await _supabaseService.GetLatestPendingPingSenderAsync(phoneId);
-                    
-                    if (pingSender != null && !string.IsNullOrEmpty(pingSender.TargetNumber))
-                    {
-                        contactNumber = pingSender.TargetNumber;
-                        _logger.LogInformation("[MSG] LID-JID: matched via ping_sender number={Number}", contactNumber);
-                    }
-                    else if (!string.IsNullOrEmpty(payloadNumber))
-                    {
-                        contactNumber = payloadNumber;
-                        _logger.LogInformation("[MSG] LID-JID: using payloadNumber={Number}", contactNumber);
-                    }
-                    else
-                    {
-                        _logger.LogWarning("[MSG] LID-JID {Lid}: no contact, no ping_sender, no number — skipping", jidLocal);
-                        return;
-                    }
+                    // אין מספר — שמור את ה-LID כ-number זמני
+                    // המשתמש יזהה בשלב 2 לפי pushName
+                    contactNumber = jidLocal;
+                    _logger.LogInformation("[MSG] LID-JID no number — storing LID as number={Number}", contactNumber);
                 }
             }
             else
             {
-                // JID רגיל — המספר הוא jidLocal
                 contactNumber = jidLocal;
-                // LID מגיע מה-data["lid"] או מה-sender
-                contactLid = rawLid?.Split('@')[0]; // נקה @lid suffix
+                contactLid    = rawLid?.Split('@')[0];
             }
 
-            // ── אל תיצור contact חדש אם זו הודעה יוצאת (fromMe=true) ──────
-            Contact contact;
+            // ── הודעה יוצאת (fromMe) ──────────────────────────────────────
+            // אל תיצור contact — זו הודעת PING שיצאה מאיתנו
             if (!isIncoming)
             {
                 var existingOut = await _supabaseService.GetContactByNumberAsync(phoneId, contactNumber);
                 if (existingOut == null)
                 {
-                    _logger.LogWarning("[MSG] Outgoing for unknown contact {Number} — skipping", contactNumber);
+                    _logger.LogWarning("[MSG] Outgoing for unknown {Number} — skipping", contactNumber);
                     return;
                 }
-                contact = existingOut;
+
+                // שמור הודעה יוצאת תחת ה-contact הקיים
+                await SaveMessage(phoneId, phone, existingOut, contactNumber, contactLid, isIncoming, payload);
+                return;
+            }
+
+            // ── הודעה נכנסת — שמור תמיד ──────────────────────────────────
+            // חפש contact קיים (לפי LID או number)
+            Contact? existing = null;
+            if (!string.IsNullOrEmpty(contactLid))
+                existing = await _supabaseService.GetContactByLidAsync(phoneId, contactLid);
+            if (existing == null)
+                existing = await _supabaseService.GetContactByNumberAsync(phoneId, contactNumber);
+
+            Contact contact;
+            if (existing != null)
+            {
+                contact = existing;
+                // עדכן LID אם חסר
+                if (string.IsNullOrEmpty(existing.Lid) && !string.IsNullOrEmpty(contactLid))
+                {
+                    await _supabaseService.UpsertContactAsync(phoneId, contactNumber, name: contactName, lid: contactLid);
+                    contact.Lid = contactLid;
+                }
+                _logger.LogInformation("[MSG] Found existing contact {Id} ({Number})", contact.Id, contactNumber);
             }
             else
             {
-                // הודעה נכנסת
-                // בדוק קודם אם contact קיים לפי LID (מונע כפילות בין phones)
-                Contact? existingForMsg = null;
-                if (!string.IsNullOrEmpty(contactLid))
-                    existingForMsg = await _supabaseService.GetContactByLidAsync(phoneId, contactLid);
-                if (existingForMsg == null)
-                    existingForMsg = await _supabaseService.GetContactByNumberAsync(phoneId, contactNumber);
-
-                if (existingForMsg != null)
-                {
-                    // contact קיים — עדכן שם אם צריך, אל תיצור
-                    contact = existingForMsg;
-                    _logger.LogInformation("[MSG] Found existing contact {ContactId} ({Number})", contact.Id, contactNumber);
-                }
-                else
-                {
-                    // contact חדש לגמרי — צור (אורגני, לא דרך PING)
-                    contact = await _supabaseService.UpsertContactAsync(
-                        phoneId,
-                        contactNumber,
-                        name: contactName,
-                        lid: contactLid
-                    );
-                    _logger.LogInformation("[MSG] Created new contact {ContactId} ({Number}) lid={Lid}",
-                        contact.Id, contactNumber, contactLid);
-                }
+                // Contact חדש — צור עם tag=draft
+                // draft = ממתין לזיהוי ע"י המשתמש בוויזארד
+                contact = await _supabaseService.CreateDraftContactAsync(
+                    phoneId, contactNumber, contactLid, contactName);
+                _logger.LogInformation("[MSG] Created draft contact {Id} ({Number}) lid={Lid}",
+                    contact.Id, contactNumber, contactLid);
             }
 
-            // ── Match PingSender אם יש LID ────────────────────────────────────
+            // ── Match PingSender ───────────────────────────────────────────
             if (!string.IsNullOrEmpty(contactLid))
-            {
                 await _supabaseService.MatchPingSenderByLidAsync(phoneId, contactLid, contact.Id);
-            }
 
-            // ── Build message content ─────────────────────────────────────────
-            var messageContent = new Dictionary<string, object?>();
-            if (payload.Data != null)
-            {
-                if (payload.Data.TryGetValue("text", out var text))
-                    messageContent["text"] = text;
-                if (payload.Data.TryGetValue("type", out var type))
-                    messageContent["type"] = type;
-                if (payload.Data.TryGetValue("buttonId", out var buttonId))
-                    messageContent["buttonId"] = buttonId;
-                if (payload.Data.TryGetValue("selectedId", out var selectedId))
-                    messageContent["selectedId"] = selectedId;
-                if (payload.Data.TryGetValue("caption", out var caption))
-                    messageContent["caption"] = caption;
-            }
-            if (!messageContent.ContainsKey("type") && !string.IsNullOrEmpty(payload.Type))
-                messageContent["type"] = payload.Type;
-
-            // ── Sender field בהודעה: LID אם יש, אחרת number ─────────────────
-            // זה מה שה-Python select_response ישתמש בו כ-LID
-            var messageSender = isIncoming
-                ? (contactLid ?? contactNumber)   // ← LID של הלקוח, או number כ-fallback
-                : phone.Number ?? contactNumber;  // ← הטלפון שלנו
-
-            var message = await _supabaseService.AddMessageAsync(
-                phoneId,
-                contact.Id,
-                messageSender,
-                messageContent,
-                direction: isIncoming,
-                leafId: null,
-                whatsappMessageId: payload.MessageId
-            );
-
-            _logger.LogInformation("[MSG] Saved message {MessageId} from {Sender} (incoming={IsIncoming}) for phone {PhoneId}",
-                message.Id, messageSender, isIncoming, phoneId);
+            await SaveMessage(phoneId, phone, contact, contactNumber, contactLid, isIncoming, payload);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error handling message for phone {PhoneId}", phoneId);
         }
     }
+
+    private async Task SaveMessage(Guid phoneId, Phone phone, Contact contact,
+        string contactNumber, string? contactLid, bool isIncoming, ContainerEventPayload payload)
+    {
+        var messageContent = new Dictionary<string, object?>();
+        if (payload.Data != null)
+        {
+            if (payload.Data.TryGetValue("text",       out var text))       messageContent["text"]       = text;
+            if (payload.Data.TryGetValue("type",       out var type))       messageContent["type"]       = type;
+            if (payload.Data.TryGetValue("buttonId",   out var buttonId))   messageContent["buttonId"]   = buttonId;
+            if (payload.Data.TryGetValue("selectedId", out var selectedId)) messageContent["selectedId"] = selectedId;
+            if (payload.Data.TryGetValue("caption",    out var caption))    messageContent["caption"]    = caption;
+        }
+        if (!messageContent.ContainsKey("type") && !string.IsNullOrEmpty(payload.Type))
+            messageContent["type"] = payload.Type;
+
+        // sender = LID של הלקוח (זה מה ש-select_response ישתמש בו)
+        var messageSender = isIncoming
+            ? (contactLid ?? contactNumber)
+            : phone.Number ?? contactNumber;
+
+        var message = await _supabaseService.AddMessageAsync(
+            phoneId, contact.Id, messageSender, messageContent,
+            direction: isIncoming, leafId: null,
+            whatsappMessageId: payload.MessageId);
+
+        _logger.LogInformation("[MSG] Saved message {MsgId} from {Sender} (incoming={Inc}) phone={PhoneId}",
+            message.Id, messageSender, isIncoming, phoneId);
+    }
 }
 
-// ── Webhook DTOs ──────────────────────────────────────────────────────────────
 public class ContainerEventPayload
 {
-    [JsonPropertyName("event")]
-    public string? Event { get; set; }
-
-    [JsonPropertyName("messageId")]
-    public string? MessageId { get; set; }
-
-    [JsonPropertyName("jid")]
-    public string? Jid { get; set; }
-
-    [JsonPropertyName("type")]
-    public string? Type { get; set; }
-
-    [JsonPropertyName("data")]
-    public Dictionary<string, object>? Data { get; set; }
-
-    // ← שנה מ-long? ל-object?
-    [JsonPropertyName("timestamp")]
-    public object? Timestamp { get; set; }
-
-    [JsonPropertyName("phone")]
-    public string? Phone { get; set; }
-
-    [JsonPropertyName("name")]
-    public string? Name { get; set; }
-
-    [JsonPropertyName("creds_b64")]
-    public string? CredsB64 { get; set; }
+    [JsonPropertyName("event")]    public string? Event     { get; set; }
+    [JsonPropertyName("messageId")] public string? MessageId { get; set; }
+    [JsonPropertyName("jid")]      public string? Jid       { get; set; }
+    [JsonPropertyName("type")]     public string? Type      { get; set; }
+    [JsonPropertyName("data")]     public Dictionary<string, object>? Data { get; set; }
+    [JsonPropertyName("timestamp")] public object? Timestamp { get; set; }
+    [JsonPropertyName("phone")]    public string? Phone     { get; set; }
+    [JsonPropertyName("name")]     public string? Name      { get; set; }
+    [JsonPropertyName("creds_b64")] public string? CredsB64  { get; set; }
 }
