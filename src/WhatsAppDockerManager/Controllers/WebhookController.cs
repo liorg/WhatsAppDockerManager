@@ -103,6 +103,17 @@ public class WebhookController : ControllerBase
                 payload.Jid, payload.Type,
                 System.Text.Json.JsonSerializer.Serialize(payload.Data));
 
+            // ── מניעת כפילויות — בדוק אם ההודעה כבר נשמרה ──────────────
+            if (!string.IsNullOrEmpty(payload.MessageId))
+            {
+                var exists = await _supabaseService.MessageExistsAsync(payload.MessageId);
+                if (exists)
+                {
+                    _logger.LogInformation("[MSG] Duplicate whatsapp_message_id={MsgId} — skipping", payload.MessageId);
+                    return;
+                }
+            }
+
             // ── Parse JID ─────────────────────────────────────────────────
             var jidParts  = payload.Jid.Split('@');
             var jidLocal  = jidParts[0];
