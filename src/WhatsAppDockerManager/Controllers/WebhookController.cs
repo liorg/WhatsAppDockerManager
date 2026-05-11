@@ -180,19 +180,19 @@ public class WebhookController : ControllerBase
                 contactLid    = rawLid?.Split('@')[0];
             }
 
-            // ── הודעה יוצאת (fromMe) ──────────────────────────────────────
-            // אל תיצור contact — זו הודעת PING שיצאה מאיתנו
+            // ── הודעה יוצאת (fromMe=true) — הודעת PING שלנו ─────────────
             if (!isIncoming)
             {
                 var existingOut = await _supabaseService.GetContactByNumberAsync(phoneId, contactNumber);
                 if (existingOut == null)
                 {
-                    _logger.LogWarning("[MSG] Outgoing for unknown {Number} — skipping", contactNumber);
-                    return;
+                    // contact טרם נוצר — צור draft כדי לשמור את ה-PING
+                    _logger.LogInformation("[MSG] Outgoing PING for new contact {Number} — creating draft", contactNumber);
+                    existingOut = await _supabaseService.CreateDraftContactAsync(phoneId, contactNumber, contactLid, contactName);
                 }
 
-                // שמור הודעה יוצאת תחת ה-contact הקיים
-                await SaveMessage(phoneId, phone, existingOut, contactNumber, contactLid, isIncoming, payload);
+                // שמור הודעה יוצאת (direction=false)
+                await SaveMessage(phoneId, phone, existingOut, contactNumber, contactLid, isIncoming: false, payload);
                 return;
             }
 
