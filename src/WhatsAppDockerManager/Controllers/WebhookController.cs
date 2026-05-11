@@ -164,27 +164,37 @@ public class WebhookController : ControllerBase
             if (isLidJid)
             {
                 // JID הוא LID — ה-number לא מגיע בכלל מ-WhatsApp
-                // חפש contact קיים לפי LID (נוצר ב-PING עם number אמיתי)
                 contactLid = jidLocal; // ה-LID ללא @lid
 
+                // חפש contact לפי LID תחת ה-phone הנוכחי
                 var existingByLid = await _supabaseService.GetContactByLidAsync(phoneId, jidLocal);
+
                 if (existingByLid != null)
                 {
-                    // מצאנו — השתמש במספר האמיתי מה-contact הקיים
+                    // מצאנו תחת ה-phone הנוכחי
                     contactNumber = existingByLid.Number;
-                    _logger.LogInformation("[MSG] LID-JID: matched existing contact {ContactId} number={Number}", existingByLid.Id, contactNumber);
-                }
-                else if (!string.IsNullOrEmpty(payloadNumber))
-                {
-                    // יש מספר ב-data — נשתמש בו
-                    contactNumber = payloadNumber;
-                    _logger.LogInformation("[MSG] LID-JID: no contact by LID, using payloadNumber={Number}", contactNumber);
+                    _logger.LogInformation("[MSG] LID-JID: matched contact {ContactId} number={Number} on phone {PhoneId}",
+                        existingByLid.Id, contactNumber, phoneId);
                 }
                 else
                 {
-                    // אין מספר ואין contact — לא יודעים מי זה, דלג
-                    _logger.LogWarning("[MSG] LID-JID {Lid}: no existing contact and no number in payload — skipping", jidLocal);
-                    return;
+                    // לא נמצא תחת ה-phone הנוכחי —
+                    // ייתכן שה-contact נוצר תחת phone אחר (כשיש כמה containers לאותו לקוח)
+                    // במקרה זה: שמור רק הודעה, אל תיצור contact כפול
+                    _logger.LogWarning("[MSG] LID-JID {Lid}: no contact found under phone {PhoneId} — message will be saved to existing contact if found globally, otherwise skipped",
+                        jidLocal, phoneId);
+
+                    if (!string.IsNullOrEmpty(payloadNumber))
+                    {
+                        contactNumber = payloadNumber;
+                        _logger.LogInformation("[MSG] LID-JID: using payloadNumber={Number}", contactNumber);
+                    }
+                    else
+                    {
+                        // אין מספר בכלל — דלג, אל תיצור contact עם LID כ-number
+                        _logger.LogWarning("[MSG] LID-JID {Lid}: skipping — no number available", jidLocal);
+                        return;
+                    }
                 }
             }
             else
@@ -209,15 +219,32 @@ public class WebhookController : ControllerBase
             }
             else
             {
-                // הודעה נכנסת: upsert — אם contact קיים (מPING) עדכן LID, אם לא קיים צור
-                contact = await _supabaseService.UpsertContactAsync(
-                    phoneId,
-                    contactNumber,
-                    name: contactName,
-                    lid: contactLid
-                );
-                _logger.LogInformation("[MSG] Contact upserted: {ContactId} ({Number}) lid={Lid}",
-                    contact.Id, contactNumber, contactLid);
+                // הודעה נכנסת
+                // בדוק קודם אם contact קיים לפי LID (מונע כפילות בין phones)
+                Contact? existingForMsg = null;
+                if (!string.IsNullOrEmpty(contactLid))
+                    existingForMsg = await _supabaseService.GetContactByLidAsync(phoneId, contactLid);
+                if (existingForMsg == null)
+                    existingForMsg = await _supabaseService.GetContactByNumberAsync(phoneId, contactNumber);
+
+                if (existingForMsg != null)
+                {
+                    // contact קיים — עדכן שם אם צריך, אל תיצור
+                    contact = existingForMsg;
+                    _logger.LogInformation("[MSG] Found existing contact {ContactId} ({Number})", contact.Id, contactNumber);
+                }
+                else
+                {
+                    // contact חדש לגמרי — צור (אורגני, לא דרך PING)
+                    contact = await _supabaseService.UpsertContactAsync(
+                        phoneId,
+                        contactNumber,
+                        name: contactName,
+                        lid: contactLid
+                    );
+                    _logger.LogInformation("[MSG] Created new contact {ContactId} ({Number}) lid={Lid}",
+                        contact.Id, contactNumber, contactLid);
+                }
             }
 
             // ── Match PingSender אם יש LID ────────────────────────────────────
