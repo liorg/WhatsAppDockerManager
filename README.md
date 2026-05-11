@@ -419,7 +419,11 @@ gcloud compute addresses create my-static-ip \
     --addresses=XX.XXX.XXX.XXX \
     --region=europe-central2
 
+docker pull liorgr/whatsapp-single
 
+docker stop whatsapp_972504476645
+docker rm whatsapp_972504476645
+systemctl restart whatsapp-manager.service
 ## רישיון
 
 MIT
