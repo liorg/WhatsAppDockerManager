@@ -116,6 +116,11 @@ public class WebhookController : ControllerBase
 
         try
         {
+            _logger.LogInformation("[MSG-RAW] Jid={Jid} Type={Type} Data={Data}",
+                payload.Jid,
+                payload.Type,
+                System.Text.Json.JsonSerializer.Serialize(payload.Data));
+
             // ── Parse JID ────────────────────────────────────────────────────
             var jidParts   = payload.Jid.Split('@');
             var jidLocal   = jidParts[0];                              // number OR lid-value
