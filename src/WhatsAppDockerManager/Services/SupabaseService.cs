@@ -55,6 +55,7 @@ public interface ISupabaseService
 
     Task UpdatePhoneCredsAsync(Guid phoneId, string credsBase64);
 
+    Task<bool> MessageExistsAsync(string whatsappMessageId);
     Task<Message> AddMessageAsync(Guid phoneId, Guid contactId, string sender, object content, bool direction,
      string? leafId = null, string? whatsappMessageId = null);
 
@@ -62,7 +63,7 @@ public interface ISupabaseService
     Task<PingSender> CreatePingSenderAsync(Guid phoneId, string targetNumber, string? pingMessageId);
     Task<PingSender?> GetPendingPingSenderAsync(Guid phoneId, string targetNumber);
     Task<PingSender?> GetLatestPendingPingSenderAsync(Guid phoneId);
-
+    Task<PingSender?> GetLatestPendingPingSenderAsync(Guid phoneId);
     Task<PingSender?> MatchPingSenderByLidAsync(Guid phoneId, string lid, Guid contactId);
     Task UpdatePhoneUserIdAsync(Guid phoneId, Guid userId);
     
@@ -809,6 +810,23 @@ public async Task UpdatePhoneUserIdAsync(Guid phoneId, Guid userId)
             throw;
         }
     }
+    public async Task<bool> MessageExistsAsync(string whatsappMessageId)
+    {
+        try
+        {
+            var result = await _client.From<Message>()
+                .Where(m => m.WhatsappMessageId == whatsappMessageId)
+                .Limit(1)
+                .Get();
+            return result.Models.Any();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error checking message existence {MsgId}", whatsappMessageId);
+            return false;
+        }
+    }
+
     public async Task<Message> AddMessageAsync(Guid phoneId, Guid contactId, string sender, object content,
     bool direction, string? leafId = null, string? whatsappMessageId = null)
     {
