@@ -60,6 +60,8 @@ public interface ISupabaseService
      // PingSender operations
     Task<PingSender> CreatePingSenderAsync(Guid phoneId, string targetNumber, string? pingMessageId);
     Task<PingSender?> GetPendingPingSenderAsync(Guid phoneId, string targetNumber);
+    Task<PingSender?> GetLatestPendingPingSenderAsync(Guid phoneId);
+    Task<PingSender?> GetLatestPendingPingSenderAsync(Guid phoneId);
     Task<PingSender?> MatchPingSenderByLidAsync(Guid phoneId, string lid, Guid contactId);
     Task UpdatePhoneUserIdAsync(Guid phoneId, Guid userId);
     
@@ -948,6 +950,25 @@ public async Task<PingSender?> GetPendingPingSenderAsync(Guid phoneId, string ta
     catch (Exception ex)
     {
         _logger.LogError(ex, "Error getting pending PingSender");
+        return null;
+    }
+}
+
+public async Task<PingSender?> GetLatestPendingPingSenderAsync(Guid phoneId)
+{
+    try
+    {
+        var response = await _client.From<PingSender>()
+            .Where(p => p.PhoneId == phoneId)
+            .Where(p => p.Status == "pending")
+            .Order(p => p.CreatedAt, Supabase.Postgrest.Constants.Ordering.Descending)
+            .Limit(1)
+            .Get();
+        return response.Models.FirstOrDefault();
+    }
+    catch (Exception ex)
+    {
+        _logger.LogError(ex, "Error getting latest pending PingSender for phone {PhoneId}", phoneId);
         return null;
     }
 }
