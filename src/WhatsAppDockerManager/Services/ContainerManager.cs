@@ -248,7 +248,6 @@ private async Task RegisterWebhookInContainerAsync(int fastApiPort, Guid phoneId
 {
     try
     {
-        // ← הגדל מ-3000 ל-8000
         await Task.Delay(8000);
 
         using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
@@ -257,7 +256,39 @@ private async Task RegisterWebhookInContainerAsync(int fastApiPort, Guid phoneId
         var managerWebhook = $"http://{host}:5000/api/webhook/container-event/{phoneId}";
         var payload        = new { url = managerWebhook, secret = "manager-secret" };
 
-        // ← נסה עד 3 פעמים
+        // ── שלב 1: מחק כל ה-webhooks הישנים ─────────────────────────────
+        try
+        {
+            var listResponse = await httpClient.GetAsync($"http://localhost:{fastApiPort}/webhooks");
+            if (listResponse.IsSuccessStatusCode)
+            {
+                var listJson = await listResponse.Content.ReadFromJsonAsync<WebhookListResponse>();
+                if (listJson?.Webhooks != null)
+                {
+                    foreach (var wh in listJson.Webhooks)
+                    {
+                        if (wh.Contains("container-event"))
+                        {
+                            try
+                            {
+                                var delReq = new HttpRequestMessage(HttpMethod.Delete,
+                                    $"http://localhost:{fastApiPort}/webhooks/unregister");
+                                delReq.Content = JsonContent.Create(new { url = wh });
+                                await httpClient.SendAsync(delReq);
+                                _logger.LogInformation("Unregistered stale webhook: {Url}", wh);
+                            }
+                            catch { }
+                        }
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning("Could not clean webhooks: {Msg}", ex.Message);
+        }
+
+        // ── שלב 2: רשום webhook חדש ──────────────────────────────────────
         for (int attempt = 1; attempt <= 3; attempt++)
         {
             try
@@ -267,32 +298,23 @@ private async Task RegisterWebhookInContainerAsync(int fastApiPort, Guid phoneId
 
                 if (response.IsSuccessStatusCode)
                 {
-                    _logger.LogInformation(
-                        "Webhook registered in Baileys for phone {PhoneId} on port {Port} (attempt {Attempt})",
-                        phoneId, fastApiPort, attempt);
+                    _logger.LogInformation("Webhook registered for phone {PhoneId} port {Port}",
+                        phoneId, fastApiPort);
                     return;
                 }
-
-                _logger.LogWarning(
-                    "Webhook registration attempt {Attempt} failed: {Status}",
-                    attempt, response.StatusCode);
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(
-                    "Webhook registration attempt {Attempt} {fastApiPort} error: {Message} ",
-                    attempt,fastApiPort, ex.Message);
+                _logger.LogWarning("Webhook registration attempt {Attempt} error: {Message}",
+                    attempt, ex.Message);
             }
 
-            if (attempt < 3)
-                await Task.Delay(5000); // ← המתן 5 שניות בין ניסיונות
+            if (attempt < 3) await Task.Delay(5000);
         }
-
-        _logger.LogWarning("Could not register webhook after 3 attempts for  {fastApiPort} phone {PhoneId}", fastApiPort, phoneId);
     }
     catch (Exception ex)
     {
-        _logger.LogWarning(ex, "Could not register webhook in fastApiPort {fastApiPort} for phone {PhoneId}", fastApiPort, phoneId);
+        _logger.LogWarning(ex, "Could not register webhook for phone {PhoneId}", phoneId);
     }
 }
 
@@ -654,3 +676,4 @@ public async Task<bool> PausePhoneContainerAsync(Phone phone)
 
 // DTO לבדיקת status
 record ContainerStatusResponse(string Status);
+record WebhookListResponse(List<string> Webhooks, int Count);
