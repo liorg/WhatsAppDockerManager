@@ -146,21 +146,6 @@ public class WebhookController : ControllerBase
             string  contactNumber;
             string? contactLid;
 
-            if (isLidJid)
-            {
-                // JID הוא LID — ה-number הגיע ב-data או לא הגיע בכלל
-                contactLid    = jidLocal; // זה ה-LID האמיתי
-                contactNumber = payloadNumber ?? jidLocal; // נשתמש ב-LID כ-fallback אם אין number
-                _logger.LogInformation("[MSG] LID-JID message: lid={Lid} number={Number}", contactLid, contactNumber);
-            }
-            else
-            {
-                // JID רגיל — המספר הוא jidLocal, ה-LID מגיע מה-sender בנפרד
-                contactNumber = jidLocal;
-                // ה-LID יגיע מה-sender של ההודעה (לא מה-JID) — נמלא אחרי isIncoming
-                contactLid    = null; // יוגדר מה-sender בהמשך
-            }
-
             // ── fromMe ────────────────────────────────────────────────────────
             bool isIncoming = true;
             if (payload.Data?.TryGetValue("fromMe", out var fromMe) == true)
@@ -171,45 +156,67 @@ public class WebhookController : ControllerBase
                     isIncoming = !Convert.ToBoolean(fromMe);
             }
 
-            // ── Sender = LID של הלקוח (כשנכנסת הודעה) ───────────────────────
-            // WhatsApp שולח את ה-LID האמיתי של הלקוח בשדה sender
-            string? senderLid = null;
-            if (payload.Data?.TryGetValue("sender", out var senderVal) == true)
+            // ── LID מה-data (כולל @lid suffix) ───────────────────────────────
+            string? rawLid = null;
+            if (payload.Data?.TryGetValue("lid", out var lidVal) == true)
+                rawLid = lidVal?.ToString(); // "46037871886515@lid"
+
+            if (isLidJid)
             {
-                var senderStr = senderVal?.ToString();
-                if (!string.IsNullOrEmpty(senderStr) && senderStr.Contains("@lid"))
-                    senderLid = senderStr.Split('@')[0];
+                // JID הוא LID — ה-number לא מגיע בכלל מ-WhatsApp
+                // חפש contact קיים לפי LID (נוצר ב-PING עם number אמיתי)
+                contactLid = jidLocal; // ה-LID ללא @lid
+
+                var existingByLid = await _supabaseService.GetContactByLidAsync(phoneId, jidLocal);
+                if (existingByLid != null)
+                {
+                    // מצאנו — השתמש במספר האמיתי מה-contact הקיים
+                    contactNumber = existingByLid.Number;
+                    _logger.LogInformation("[MSG] LID-JID: matched existing contact {ContactId} number={Number}", existingByLid.Id, contactNumber);
+                }
+                else if (!string.IsNullOrEmpty(payloadNumber))
+                {
+                    // יש מספר ב-data — נשתמש בו
+                    contactNumber = payloadNumber;
+                    _logger.LogInformation("[MSG] LID-JID: no contact by LID, using payloadNumber={Number}", contactNumber);
+                }
+                else
+                {
+                    // אין מספר ואין contact — לא יודעים מי זה, דלג
+                    _logger.LogWarning("[MSG] LID-JID {Lid}: no existing contact and no number in payload — skipping", jidLocal);
+                    return;
+                }
+            }
+            else
+            {
+                // JID רגיל — המספר הוא jidLocal
+                contactNumber = jidLocal;
+                // LID מגיע מה-data["lid"] או מה-sender
+                contactLid = rawLid?.Split('@')[0]; // נקה @lid suffix
             }
 
-            // אם ה-JID לא היה @lid, ה-LID הוא מה-sender
-            if (!isLidJid && senderLid != null)
-                contactLid = senderLid;
-
             // ── אל תיצור contact חדש אם זו הודעה יוצאת (fromMe=true) ──────
-            // הודעות יוצאות הן PING ששלחנו — ה-contact כבר קיים
             Contact contact;
             if (!isIncoming)
             {
-                // הודעה יוצאת: מצא contact קיים בלבד, אל תיצור
                 var existingOut = await _supabaseService.GetContactByNumberAsync(phoneId, contactNumber);
                 if (existingOut == null)
                 {
-                    _logger.LogWarning("[MSG] Outgoing message for unknown contact {Number} — skipping contact creation", contactNumber);
-                    return; // אל תיצור contact לא מזוהה
+                    _logger.LogWarning("[MSG] Outgoing for unknown contact {Number} — skipping", contactNumber);
+                    return;
                 }
                 contact = existingOut;
             }
             else
             {
-                // הודעה נכנסת: upsert רגיל — אבל רק עדכן LID אם contact כבר קיים
-                // אם לא קיים — צור חדש (אנשי קשר אורגניים שלא עברו PING)
+                // הודעה נכנסת: upsert — אם contact קיים (מPING) עדכן LID, אם לא קיים צור
                 contact = await _supabaseService.UpsertContactAsync(
                     phoneId,
                     contactNumber,
                     name: contactName,
                     lid: contactLid
                 );
-                _logger.LogInformation("[MSG] Contact upserted: {ContactId} ({Number}) lid={Lid}", 
+                _logger.LogInformation("[MSG] Contact upserted: {ContactId} ({Number}) lid={Lid}",
                     contact.Id, contactNumber, contactLid);
             }
 
