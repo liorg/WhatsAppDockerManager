@@ -31,6 +31,7 @@ public interface ISupabaseService
     // Contact operations
     Task<Contact?> GetContactByIdAsync(Guid contactId);
     Task<Contact?> GetContactByNumberAsync(Guid phoneId, string contactNumber);
+    Task<Contact?> GetContactByLidAsync(Guid phoneId, string lid);
     Task<List<Contact>> GetContactsForPhoneAsync(Guid phoneId);
     Task<Contact> CreateContactAsync(Contact contact);
     Task<Contact> UpdateContactAsync(Contact contact);
@@ -523,6 +524,26 @@ public async Task UpdatePhoneUserIdAsync(Guid phoneId, Guid userId)
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error getting contact by number {Number} for phone {PhoneId}", contactNumber, phoneId);
+            return null;
+        }
+    }
+
+    public async Task<Contact?> GetContactByLidAsync(Guid phoneId, string lid)
+    {
+        try
+        {
+            // נקה @lid suffix אם קיים
+            var cleanLid = lid.Contains('@') ? lid.Split('@')[0] : lid;
+
+            var response = await _client.From<Contact>()
+                .Where(c => c.PhoneId == phoneId)
+                .Where(c => c.Lid == cleanLid)
+                .Get();
+            return response.Models.FirstOrDefault();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error getting contact by LID {Lid} for phone {PhoneId}", lid, phoneId);
             return null;
         }
     }
