@@ -33,47 +33,6 @@ public class PhonesController : ControllerBase
     }
 
     /// <summary>
-    /// Send a text message to a WhatsApp JID (number or LID)
-    /// </summary>
-    [HttpPost("{phoneId}/send/text")]
-    public async Task<IActionResult> SendText(Guid phoneId, [FromBody] SendTextRequest request)
-    {
-        if (string.IsNullOrEmpty(request.Jid) || string.IsNullOrEmpty(request.Text))
-            return BadRequest(new { error = "jid and text are required" });
-
-        var phone = await _supabaseService.GetPhoneByIdAsync(phoneId);
-        if (phone == null)
-            return NotFound(new { error = "Phone not found" });
-
-        var (fastApiPort, _) = PortHashCalculator.GetBothPorts(phone.Number, _configuration);
-
-        try
-        {
-            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
-            var response = await http.PostAsJsonAsync(
-                $"http://localhost:{fastApiPort}/send/text",
-                new { jid = request.Jid, text = request.Text }
-            );
-
-            if (!response.IsSuccessStatusCode)
-            {
-                var err = await response.Content.ReadAsStringAsync();
-                _logger.LogWarning("Baileys send/text failed: {Status} {Error}", response.StatusCode, err);
-                return StatusCode((int)response.StatusCode, new { error = err });
-            }
-
-            var result = await response.Content.ReadFromJsonAsync<object>();
-            _logger.LogInformation("Sent text to {Jid} via phone {PhoneId}", request.Jid, phoneId);
-            return Ok(result);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error sending text for phone {PhoneId}", phoneId);
-            return StatusCode(500, new { error = ex.Message });
-        }
-    }
-
-    /// <summary>
     /// Logout and delete auth files - for fresh QR scan
     /// </summary>
     [HttpPost("{phoneId}/logoutold")]
