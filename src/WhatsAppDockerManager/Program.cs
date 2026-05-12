@@ -88,19 +88,26 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
-// Initialize Container Manager on startup
-var containerManager = app.Services.GetRequiredService<IContainerManager>();
-await containerManager.InitializeAsync();
-
-// Orphan cleanup — אחרי initialize, כשה-HostId כבר ידוע
-var orphanCleanup = app.Services.GetRequiredService<OrphanContainerCleanupService>();
-await orphanCleanup.RunCleanupAsync();
-
-// Configure pipeline
+// Configure pipeline — חייב לבוא לפני Initialize כדי ש-Swagger תמיד יעלה
 app.UseSwagger();
 app.UseSwaggerUI();
 
 app.UseCors();
+
+// Initialize Container Manager on startup — אחרי Swagger כדי שתמיד יעלה
+try
+{
+    var containerManager = app.Services.GetRequiredService<IContainerManager>();
+    await containerManager.InitializeAsync();
+
+    // Orphan cleanup — אחרי initialize, כשה-HostId כבר ידוע
+    var orphanCleanup = app.Services.GetRequiredService<OrphanContainerCleanupService>();
+    await orphanCleanup.RunCleanupAsync();
+}
+catch (Exception ex)
+{
+    Log.Error(ex, "Startup initialization failed — check SUPABASE_URL, SUPABASE_KEY, and Docker socket");
+}
 app.UseSerilogRequestLogging();
 
 app.MapControllers();
