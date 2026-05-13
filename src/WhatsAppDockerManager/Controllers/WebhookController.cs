@@ -4,7 +4,7 @@ using WhatsAppDockerManager.Models;
 using WhatsAppDockerManager.Services;
 
 namespace WhatsAppDockerManager.Controllers;
-
+//journalctl -u whatsapp-manager -n 200 --no-pager | grep -A5 -B5 "97254xxxxx|incoming\|webhook\|ACF388641ECD"
 [ApiController]
 [Route("api/[controller]")]
 public class WebhookController : ControllerBase
@@ -168,10 +168,20 @@ public class WebhookController : ControllerBase
                 }
                 else
                 {
-                    // אין מספר — שמור את ה-LID כ-number זמני
-                    // המשתמש יזהה בשלב 2 לפי pushName
-                    contactNumber = jidLocal;
-                    _logger.LogInformation("[MSG] LID-JID no number — storing LID as number={Number}", contactNumber);
+                    // אין מספר — חפש ping_sender פתוח לפי phone_id
+                    // אם נמצא, קשר את ה-LID למספר האמיתי
+                    var pendingPing = await _supabaseService.GetLatestPendingPingSenderAsync(phoneId);
+                    if (pendingPing != null && !string.IsNullOrEmpty(pendingPing.TargetNumber))
+                    {
+                        contactNumber = pendingPing.TargetNumber;
+                        _logger.LogInformation("[MSG] LID-JID matched via ping_sender: number={Number} lid={Lid}", contactNumber, jidLocal);
+                    }
+                    else
+                    {
+                        // אין ping_sender — שמור את ה-LID כ-number זמני
+                        contactNumber = jidLocal;
+                        _logger.LogInformation("[MSG] LID-JID no number — storing LID as number={Number}", contactNumber);
+                    }
                 }
             }
             else
