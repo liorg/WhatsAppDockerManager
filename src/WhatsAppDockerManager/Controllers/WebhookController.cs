@@ -201,9 +201,10 @@ public class WebhookController : ControllerBase
                     }
                     else
                     {
-                        // אין ping_sender — שמור את ה-LID כ-number זמני
-                        contactNumber = jidLocal;
-                        _logger.LogInformation("[MSG] LID-JID no number — storing LID as number={Number}", contactNumber);
+                        // אין ping_sender ואין מספר — דלג על ההודעה
+                        // (race condition: ההודעה הגיעה לפני שה-ping_sender נרשם ב-DB)
+                        _logger.LogInformation("[MSG] LID-JID no number and no ping_sender — skipping message");
+                        return;
                     }
                 }
             }
