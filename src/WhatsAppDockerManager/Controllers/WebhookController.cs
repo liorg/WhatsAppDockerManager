@@ -215,9 +215,9 @@ public class WebhookController : ControllerBase
                     }
                     else
                     {
-                        // אין ping_sender ואין מספר — דלג (race condition)
-                        _logger.LogInformation("[MSG] LID-JID incoming — no number and no ping_sender, skipping");
-                        return;
+                        // אין ping_sender — זה מישהו אחר שפנה אלינו, צור draft contact
+                        contactNumber = jidLocal; // LID כ-number זמני
+                        _logger.LogInformation("[MSG] LID-JID incoming — no ping_sender, creating draft with LID as number");
                     }
                 }
             }

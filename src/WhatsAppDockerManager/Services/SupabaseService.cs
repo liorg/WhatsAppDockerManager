@@ -1005,9 +1005,9 @@ public async Task<PingSender?> GetLatestPendingPingSenderAsync(Guid phoneId)
 {
     try
     {
+        // חפש pending או matched — כדי לזהות PING שנשלח לאחרונה
         var response = await _client.From<PingSender>()
             .Where(p => p.PhoneId == phoneId)
-            .Where(p => p.Status == "pending")
             .Order(p => p.CreatedAt, Supabase.Postgrest.Constants.Ordering.Descending)
             .Limit(1)
             .Get();
