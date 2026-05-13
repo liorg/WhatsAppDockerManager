@@ -176,7 +176,22 @@ public class WebhookController : ControllerBase
             {
                 contactLid = jidLocal; // ה-LID ללא @lid
 
-                // חפש contact קיים לפי LID (כבר קושר בעבר)
+                // הודעה יוצאת עם LID (fromMe=true) — זה PING שלנו
+                // לא יוצרים contact חדש, שומרים רק אם ה-contact כבר קיים
+                if (!isIncoming)
+                {
+                    var existingByLid = await _supabaseService.GetContactByLidAsync(phoneId, jidLocal);
+                    if (existingByLid == null)
+                    {
+                        _logger.LogInformation("[MSG] LID-JID outgoing — no existing contact, skipping");
+                        return;
+                    }
+                    _logger.LogInformation("[MSG] LID-JID outgoing — saving to existing contact {Id}", existingByLid.Id);
+                    await SaveMessage(phoneId, phone, existingByLid, existingByLid.Number, contactLid, isIncoming: false, payload);
+                    return;
+                }
+
+                // הודעה נכנסת — חפש contact קיים לפי LID
                 var byLid = await _supabaseService.GetContactByLidAsync(phoneId, jidLocal);
                 if (byLid != null)
                 {
@@ -191,8 +206,7 @@ public class WebhookController : ControllerBase
                 }
                 else
                 {
-                    // אין מספר — חפש ping_sender פתוח לפי phone_id
-                    // אם נמצא, קשר את ה-LID למספר האמיתי
+                    // חפש ping_sender פתוח לפי phone_id
                     var pendingPing = await _supabaseService.GetLatestPendingPingSenderAsync(phoneId);
                     if (pendingPing != null && !string.IsNullOrEmpty(pendingPing.TargetNumber))
                     {
@@ -201,9 +215,8 @@ public class WebhookController : ControllerBase
                     }
                     else
                     {
-                        // אין ping_sender ואין מספר — דלג על ההודעה
-                        // (race condition: ההודעה הגיעה לפני שה-ping_sender נרשם ב-DB)
-                        _logger.LogInformation("[MSG] LID-JID no number and no ping_sender — skipping message");
+                        // אין ping_sender ואין מספר — דלג (race condition)
+                        _logger.LogInformation("[MSG] LID-JID incoming — no number and no ping_sender, skipping");
                         return;
                     }
                 }
