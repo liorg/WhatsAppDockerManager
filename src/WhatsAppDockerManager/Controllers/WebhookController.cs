@@ -242,11 +242,12 @@ public class WebhookController : ControllerBase
             {
                 contact = existing;
                 // עדכן LID אם חסר
-                if (string.IsNullOrEmpty(existing.Lid) && !string.IsNullOrEmpty(contactLid))
-                {
-                    await _supabaseService.UpsertContactAsync(phoneId, contactNumber, name: contactName, lid: contactLid);
-                    contact.Lid = contactLid;
-                }
+                // לא מעדכנים LID אוטומטית — זה יקרה רק בשלב 3 ע"י המשתמש
+                // if (string.IsNullOrEmpty(existing.Lid) && !string.IsNullOrEmpty(contactLid))
+                // {
+                //     await _supabaseService.UpsertContactAsync(phoneId, contactNumber, name: contactName, lid: contactLid);
+                //     contact.Lid = contactLid;
+                // }
                 _logger.LogInformation("[MSG] Found existing contact {Id} ({Number})", contact.Id, contactNumber);
             }
             else
