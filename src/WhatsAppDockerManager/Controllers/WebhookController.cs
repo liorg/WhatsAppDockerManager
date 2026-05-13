@@ -191,34 +191,19 @@ public class WebhookController : ControllerBase
                     return;
                 }
 
-                // הודעה נכנסת — חפש contact קיים לפי LID
+                // הודעה נכנסת עם LID — תמיד צור/מצא draft לפי ה-LID
+                // המשתמש יבחר בשלב 2 איזה draft הוא הלקוח ויקשר ל-contact החדש
                 var byLid = await _supabaseService.GetContactByLidAsync(phoneId, jidLocal);
                 if (byLid != null)
                 {
                     contactNumber = byLid.Number;
                     _logger.LogInformation("[MSG] Found by LID: contact={Id} number={Number}", byLid.Id, contactNumber);
                 }
-                else if (!string.IsNullOrEmpty(payloadNumber))
-                {
-                    // יש מספר ב-data
-                    contactNumber = payloadNumber;
-                    _logger.LogInformation("[MSG] LID-JID using payloadNumber={Number}", contactNumber);
-                }
                 else
                 {
-                    // חפש ping_sender פתוח לפי phone_id
-                    var pendingPing = await _supabaseService.GetLatestPendingPingSenderAsync(phoneId);
-                    if (pendingPing != null && !string.IsNullOrEmpty(pendingPing.TargetNumber))
-                    {
-                        contactNumber = pendingPing.TargetNumber;
-                        _logger.LogInformation("[MSG] LID-JID matched via ping_sender: number={Number} lid={Lid}", contactNumber, jidLocal);
-                    }
-                    else
-                    {
-                        // אין ping_sender — זה מישהו אחר שפנה אלינו, צור draft contact
-                        contactNumber = jidLocal; // LID כ-number זמני
-                        _logger.LogInformation("[MSG] LID-JID incoming — no ping_sender, creating draft with LID as number");
-                    }
+                    // LID לא מוכר — צור draft עם LID כ-number זמני
+                    contactNumber = jidLocal;
+                    _logger.LogInformation("[MSG] LID-JID incoming — new draft with LID={Lid}", jidLocal);
                 }
             }
             else
