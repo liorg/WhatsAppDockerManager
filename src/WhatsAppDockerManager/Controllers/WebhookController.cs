@@ -4,7 +4,7 @@ using WhatsAppDockerManager.Models;
 using WhatsAppDockerManager.Services;
 
 namespace WhatsAppDockerManager.Controllers;
-//journalctl -u whatsapp-manager -n 200 --no-pager | grep -A5 -B5 "97254xxxxx|incoming\|webhook\|ACF388641ECD"
+
 [ApiController]
 [Route("api/[controller]")]
 public class WebhookController : ControllerBase
@@ -109,6 +109,29 @@ public class WebhookController : ControllerBase
                 var exists = await _supabaseService.MessageExistsAsync(payload.MessageId);
                 if (exists)
                 {
+                    // אם יש pushName בהודעה הכפולה — עדכן את שם ה-contact
+                    if (payload.Data?.TryGetValue("pushName", out var dupPushName) == true
+                        && dupPushName is System.Text.Json.JsonElement dupNameEl
+                        && dupNameEl.ValueKind == System.Text.Json.JsonValueKind.String)
+                    {
+                        var dupName = dupNameEl.GetString();
+                        if (!string.IsNullOrEmpty(dupName))
+                        {
+                            var jidForDup = payload.Jid?.Split('@')[0];
+                            if (!string.IsNullOrEmpty(jidForDup))
+                            {
+                                // חפש contact לפי LID או מספר ועדכן שם
+                                var contactForName = await _supabaseService.GetContactByLidAsync(phoneId, jidForDup)
+                                    ?? await _supabaseService.GetContactByNumberAsync(phoneId, jidForDup);
+                                if (contactForName != null && (string.IsNullOrEmpty(contactForName.Name) || contactForName.Name == contactForName.Number))
+                                {
+                                    contactForName.Name = dupName;
+                                    await _supabaseService.UpdateContactAsync(contactForName);
+                                    _logger.LogInformation("[MSG] Updated contact name from duplicate: {Name}", dupName);
+                                }
+                            }
+                        }
+                    }
                     _logger.LogInformation("[MSG] Duplicate whatsapp_message_id={MsgId} — skipping", payload.MessageId);
                     return;
                 }
