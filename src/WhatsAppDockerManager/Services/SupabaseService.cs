@@ -830,11 +830,11 @@ public async Task UpdatePhoneUserIdAsync(Guid phoneId, Guid userId)
     public async Task<Message> AddMessageAsync(Guid phoneId, Guid contactId, string sender, object content,
     bool direction, string? leafId = null, string? whatsappMessageId = null)
     {
-        var call = await GetOrCreateActiveCallAsync(phoneId, contactId);
+       // var call = await GetOrCreateActiveCallAsync(phoneId, contactId);
 
         var message = new Message
         {
-            CallId = call.Id,
+            CallId = null,
             Sender = sender,
             Content = JsonSerializer.Serialize(content, new JsonSerializerOptions 
             { 
