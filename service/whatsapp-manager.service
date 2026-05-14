@@ -1,0 +1,21 @@
+[Unit]
+Description=WhatsApp Docker Manager
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+WorkingDirectory=/opt/myapp/current
+
+Environment=ASPNETCORE_URLS=http://0.0.0.0:5000
+Environment=REDIS_CONNECTION=localhost:6379
+EnvironmentFile=-/opt/myapp/shared/.env
+
+ExecStartPre=/bin/bash -c 'until docker exec redis_shared redis-cli ping | grep -q PONG; do sleep 1; done'
+ExecStart=/usr/bin/dotnet /opt/myapp/current/WhatsAppDockerManager.dll
+
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
