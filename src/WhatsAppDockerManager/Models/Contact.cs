@@ -8,7 +8,10 @@ public class Contact : BaseModel
 {
     [PrimaryKey("id")]
     public Guid Id { get; set; }
-
+    
+    [Column("whatsapp_name")]
+    public string? WhatsappName { get; set; }
+  
     [Column("phone_id")]
     public Guid? PhoneId { get; set; }
 
