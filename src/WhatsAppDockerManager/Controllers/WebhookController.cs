@@ -238,27 +238,35 @@ public class WebhookController : ControllerBase
                 existing = await _supabaseService.GetContactByNumberAsync(phoneId, contactNumber);
 
             Contact contact;
-            if (existing != null)
+           if (existing != null)
             {
                 contact = existing;
-
-                // עדכן שם אם pushName הגיע ועדיין אין שם אמיתי
-                if (!string.IsNullOrEmpty(contactName) &&
-                    (string.IsNullOrEmpty(contact.Name) || 
-                     contact.Name == contact.Number || 
-                     contact.Name == contact.Lid))
+            
+                if (!string.IsNullOrEmpty(contactName))
                 {
-                    contact.Name = contactName;
-                    await _supabaseService.UpdateContactAsync(contact);
-                    _logger.LogInformation("[MSG] Updated contact name: {Name}", contactName);
+                    bool needsUpdate = false;
+            
+                    if (string.IsNullOrEmpty(contact.WhatsappName) || contact.WhatsappName != contactName)
+                    {
+                        contact.WhatsappName = contactName;
+                        needsUpdate = true;
+                    }
+            
+                    if (string.IsNullOrEmpty(contact.Name) || 
+                        contact.Name == contact.Number || 
+                        contact.Name == contact.Lid)
+                    {
+                        contact.Name = contactName;
+                        needsUpdate = true;
+                    }
+            
+                    if (needsUpdate)
+                    {
+                        await _supabaseService.UpdateContactAsync(contact);
+                        _logger.LogInformation("[MSG] Updated contact name/whatsapp_name: {Name}", contactName);
+                    }
                 }
-                // עדכן LID אם חסר
-                // לא מעדכנים LID אוטומטית — זה יקרה רק בשלב 3 ע"י המשתמש
-                // if (string.IsNullOrEmpty(existing.Lid) && !string.IsNullOrEmpty(contactLid))
-                // {
-                //     await _supabaseService.UpsertContactAsync(phoneId, contactNumber, name: contactName, lid: contactLid);
-                //     contact.Lid = contactLid;
-                // }
+            
                 _logger.LogInformation("[MSG] Found existing contact {Id} ({Number})", contact.Id, contactNumber);
             }
             else
