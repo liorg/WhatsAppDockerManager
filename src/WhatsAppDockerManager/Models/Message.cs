@@ -12,6 +12,10 @@ public class Message : BaseModel
     [Column("call_id")]
     public Guid? CallId { get; set; }
 
+
+    [Column("contact_id")]
+    public Guid? ContactId { get; set; }
+   
     [Column("sender")]
     public string Sender { get; set; } = string.Empty;
 
