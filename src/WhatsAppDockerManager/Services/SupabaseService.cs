@@ -835,6 +835,7 @@ public async Task UpdatePhoneUserIdAsync(Guid phoneId, Guid userId)
         var message = new Message
         {
             CallId = null,
+        ContactId = contactId,  // ← הוסף
             Sender = sender,
             Content = JsonSerializer.Serialize(content, new JsonSerializerOptions 
             { 
