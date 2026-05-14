@@ -4,6 +4,7 @@ using WhatsAppDockerManager.Models;
 using WhatsAppDockerManager.Services;
 
 namespace WhatsAppDockerManager.Controllers;
+//$ journalctl -u whatsapp-manager.service -f --no-pager | grep -E "MSG-RAW|MSG]|LID|Contact|PING|error|Error"
 
 [ApiController]
 [Route("api/[controller]")]
@@ -240,6 +241,17 @@ public class WebhookController : ControllerBase
             if (existing != null)
             {
                 contact = existing;
+
+                // עדכן שם אם pushName הגיע ועדיין אין שם אמיתי
+                if (!string.IsNullOrEmpty(contactName) &&
+                    (string.IsNullOrEmpty(contact.Name) || 
+                     contact.Name == contact.Number || 
+                     contact.Name == contact.Lid))
+                {
+                    contact.Name = contactName;
+                    await _supabaseService.UpdateContactAsync(contact);
+                    _logger.LogInformation("[MSG] Updated contact name: {Name}", contactName);
+                }
                 // עדכן LID אם חסר
                 // לא מעדכנים LID אוטומטית — זה יקרה רק בשלב 3 ע"י המשתמש
                 // if (string.IsNullOrEmpty(existing.Lid) && !string.IsNullOrEmpty(contactLid))
