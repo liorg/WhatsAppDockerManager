@@ -14,6 +14,25 @@ public class WebhookController : ControllerBase
     private readonly ISupabaseService _supabaseService;
     private readonly ILogger<WebhookController> _logger;
 
+    // JIDs שיש להתעלם מהם לחלוטין — לא שומרים contact ולא הודעה
+    private static readonly HashSet<string> _ignoredJidDomains = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "broadcast", "g.us", "newsletter"
+    };
+    private static readonly HashSet<string> _ignoredJidLocals = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "status", "0"
+    };
+
+    // ערכי LID שהם מזויפים — לא לשמור לעולם
+    private static readonly HashSet<string> _bogusLidValues = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "status", "broadcast", "0", "", "null", "undefined"
+    };
+
+    private static bool IsValidLid(string? lid) =>
+        !string.IsNullOrWhiteSpace(lid) && !_bogusLidValues.Contains(lid);
+
     public WebhookController(
         IContainerManager containerManager,
         ISupabaseService supabaseService,
@@ -80,16 +99,6 @@ public class WebhookController : ControllerBase
         }
     }
 
-    /// <summary>
-    /// Handle incoming message.
-    /// 
-    /// עיקרון: שמור את כל ההודעות תמיד — גם אם לא מכירים את השולח.
-    /// המשתמש יזהה ויקשר בשלב 2 של הוויזארד.
-    /// 
-    /// JID formats:
-    ///   "972504476645@s.whatsapp.net" → number JID
-    ///   "46037871886515@lid"          → LID JID (WhatsApp חדש)
-    /// </summary>
     private async Task HandleIncomingMessage(Guid phoneId, Phone phone, ContainerEventPayload payload)
     {
         if (string.IsNullOrEmpty(payload.Jid))
@@ -104,13 +113,26 @@ public class WebhookController : ControllerBase
                 payload.Jid, payload.Type,
                 System.Text.Json.JsonSerializer.Serialize(payload.Data));
 
-            // ── מניעת כפילויות — בדוק אם ההודעה כבר נשמרה ──────────────
+            // ── Parse JID ─────────────────────────────────────────────────
+            var jidParts  = payload.Jid.Split('@');
+            var jidLocal  = jidParts[0];
+            var jidDomain = jidParts.Length > 1 ? jidParts[1] : "";
+            bool isLidJid = jidDomain == "lid";
+
+            // ── סנן JIDs שיש להתעלם מהם לחלוטין ─────────────────────────
+            if (_ignoredJidDomains.Contains(jidDomain) || _ignoredJidLocals.Contains(jidLocal))
+            {
+                _logger.LogInformation("[MSG] Ignored JID={Jid} — broadcast/status/group", payload.Jid);
+                return;
+            }
+
+            // ── מניעת כפילויות ────────────────────────────────────────────
             if (!string.IsNullOrEmpty(payload.MessageId))
             {
                 var exists = await _supabaseService.MessageExistsAsync(payload.MessageId);
                 if (exists)
                 {
-                    // אם יש pushName בהודעה הכפולה — עדכן את שם ה-contact
+                    // עדכן שם אם יש pushName בהודעה כפולה
                     if (payload.Data?.TryGetValue("pushName", out var dupPushName) == true
                         && dupPushName is System.Text.Json.JsonElement dupNameEl
                         && dupNameEl.ValueKind == System.Text.Json.JsonValueKind.String)
@@ -121,7 +143,6 @@ public class WebhookController : ControllerBase
                             var jidForDup = payload.Jid?.Split('@')[0];
                             if (!string.IsNullOrEmpty(jidForDup))
                             {
-                                // חפש contact לפי LID או מספר ועדכן שם
                                 var contactForName = await _supabaseService.GetContactByLidAsync(phoneId, jidForDup)
                                     ?? await _supabaseService.GetContactByNumberAsync(phoneId, jidForDup);
                                 if (contactForName != null && (string.IsNullOrEmpty(contactForName.Name) || contactForName.Name == contactForName.Number))
@@ -138,12 +159,6 @@ public class WebhookController : ControllerBase
                 }
             }
 
-            // ── Parse JID ─────────────────────────────────────────────────
-            var jidParts  = payload.Jid.Split('@');
-            var jidLocal  = jidParts[0];
-            var jidDomain = jidParts.Length > 1 ? jidParts[1] : "";
-            bool isLidJid = jidDomain == "lid";
-
             // ── Extract from payload.Data ──────────────────────────────────
             string? contactName   = null;
             string? payloadNumber = null;
@@ -156,7 +171,12 @@ public class WebhookController : ControllerBase
                 if (payload.Data.TryGetValue("number", out var num))
                     payloadNumber = num?.ToString()?.TrimStart('+');
                 if (payload.Data.TryGetValue("lid", out var lidVal))
-                    rawLid = lidVal?.ToString(); // e.g. "46037871886515@lid"
+                {
+                    var rawLidRaw = lidVal?.ToString();
+                    // סנן ערכי LID מזויפים (status@broadcast וכו')
+                    var lidLocal = rawLidRaw?.Split('@')[0];
+                    rawLid = IsValidLid(lidLocal) ? rawLidRaw : null;
+                }
             }
 
             // ── fromMe ────────────────────────────────────────────────────
@@ -175,12 +195,11 @@ public class WebhookController : ControllerBase
 
             if (isLidJid)
             {
-                contactLid = jidLocal; // ה-LID ללא @lid
+                contactLid = jidLocal; // ה-LID ללא @lid — זה הערך החשוב, לא לדרוס!
 
-                // הודעה יוצאת עם LID (fromMe=true) — זה PING שלנו
-                // לא יוצרים contact חדש, שומרים רק אם ה-contact כבר קיים
                 if (!isIncoming)
                 {
+                    // הודעה יוצאת עם LID — PING שלנו
                     var existingByLid = await _supabaseService.GetContactByLidAsync(phoneId, jidLocal);
                     if (existingByLid == null)
                     {
@@ -192,8 +211,7 @@ public class WebhookController : ControllerBase
                     return;
                 }
 
-                // הודעה נכנסת עם LID — תמיד צור/מצא draft לפי ה-LID
-                // המשתמש יבחר בשלב 2 איזה draft הוא הלקוח ויקשר ל-contact החדש
+                // הודעה נכנסת עם LID
                 var byLid = await _supabaseService.GetContactByLidAsync(phoneId, jidLocal);
                 if (byLid != null)
                 {
@@ -202,35 +220,33 @@ public class WebhookController : ControllerBase
                 }
                 else
                 {
-                    // LID לא מוכר — צור draft עם LID כ-number זמני
-                    contactNumber = jidLocal;
+                    contactNumber = jidLocal; // LID כ-number זמני
                     _logger.LogInformation("[MSG] LID-JID incoming — new draft with LID={Lid}", jidLocal);
                 }
             }
             else
             {
                 contactNumber = jidLocal;
-                contactLid    = rawLid?.Split('@')[0];
+                // rawLid מגיע מה-payload — זה ה-LID האמיתי, לא לדרוס אם כבר קיים
+                // סנן LID מזויף — לא לשמור status/broadcast כ-LID
+                var rawLidLocal = string.IsNullOrEmpty(rawLid) ? null : rawLid.Split('@')[0];
+                contactLid = IsValidLid(rawLidLocal) ? rawLidLocal : null;
             }
 
-            // ── הודעה יוצאת (fromMe=true) — הודעת PING שלנו ─────────────
+            // ── הודעה יוצאת (PING שלנו) ───────────────────────────────────
             if (!isIncoming)
             {
                 var existingOut = await _supabaseService.GetContactByNumberAsync(phoneId, contactNumber);
                 if (existingOut == null)
                 {
-                    // contact טרם נוצר — צור draft כדי לשמור את ה-PING
                     _logger.LogInformation("[MSG] Outgoing PING for new contact {Number} — creating draft", contactNumber);
                     existingOut = await _supabaseService.CreateDraftContactAsync(phoneId, contactNumber, contactLid, contactName);
                 }
-
-                // שמור הודעה יוצאת (direction=false)
                 await SaveMessage(phoneId, phone, existingOut, contactNumber, contactLid, isIncoming: false, payload);
                 return;
             }
 
             // ── הודעה נכנסת — שמור תמיד ──────────────────────────────────
-            // חפש contact קיים (לפי LID או number)
             Contact? existing = null;
             if (!string.IsNullOrEmpty(contactLid))
                 existing = await _supabaseService.GetContactByLidAsync(phoneId, contactLid);
@@ -238,41 +254,47 @@ public class WebhookController : ControllerBase
                 existing = await _supabaseService.GetContactByNumberAsync(phoneId, contactNumber);
 
             Contact contact;
-           if (existing != null)
+            if (existing != null)
             {
                 contact = existing;
-            
+
+                bool needsUpdate = false;
+
+                // עדכן whatsapp_name ו-name — אבל לא לדרוס LID!
                 if (!string.IsNullOrEmpty(contactName))
                 {
-                    bool needsUpdate = false;
-            
                     if (string.IsNullOrEmpty(contact.WhatsappName) || contact.WhatsappName != contactName)
                     {
                         contact.WhatsappName = contactName;
                         needsUpdate = true;
                     }
-            
-                    if (string.IsNullOrEmpty(contact.Name) || 
-                        contact.Name == contact.Number || 
+                    if (string.IsNullOrEmpty(contact.Name) ||
+                        contact.Name == contact.Number ||
                         contact.Name == contact.Lid)
                     {
                         contact.Name = contactName;
                         needsUpdate = true;
                     }
-            
-                    if (needsUpdate)
-                    {
-                        await _supabaseService.UpdateContactAsync(contact);
-                        _logger.LogInformation("[MSG] Updated contact name/whatsapp_name: {Name}", contactName);
-                    }
                 }
-            
+
+                // עדכן LID אם:
+                // 1. ה-LID הנוכחי ריק
+                // 2. ה-LID הנוכחי הוא ערך מזויף (status וכו') — דרוס!
+                if (IsValidLid(contactLid) && (!IsValidLid(contact.Lid) || string.IsNullOrEmpty(contact.Lid)))
+                {
+                    contact.Lid = contactLid;
+                    needsUpdate = true;
+                    _logger.LogInformation("[MSG] Setting LID={Lid} on existing contact {Id}", contactLid, contact.Id);
+                }
+
+                if (needsUpdate)
+                    await _supabaseService.UpdateContactAsync(contact);
+
                 _logger.LogInformation("[MSG] Found existing contact {Id} ({Number})", contact.Id, contactNumber);
             }
             else
             {
-                // Contact חדש — צור עם tag=draft
-                // draft = ממתין לזיהוי ע"י המשתמש בוויזארד
+                // Contact חדש — צור draft
                 contact = await _supabaseService.CreateDraftContactAsync(
                     phoneId, contactNumber, contactLid, contactName);
                 _logger.LogInformation("[MSG] Created draft contact {Id} ({Number}) lid={Lid}",
@@ -306,7 +328,6 @@ public class WebhookController : ControllerBase
         if (!messageContent.ContainsKey("type") && !string.IsNullOrEmpty(payload.Type))
             messageContent["type"] = payload.Type;
 
-        // sender = LID של הלקוח (זה מה ש-select_response ישתמש בו)
         var messageSender = isIncoming
             ? (contactLid ?? contactNumber)
             : phone.Number ?? contactNumber;
@@ -323,13 +344,13 @@ public class WebhookController : ControllerBase
 
 public class ContainerEventPayload
 {
-    [JsonPropertyName("event")]    public string? Event     { get; set; }
+    [JsonPropertyName("event")]     public string? Event     { get; set; }
     [JsonPropertyName("messageId")] public string? MessageId { get; set; }
-    [JsonPropertyName("jid")]      public string? Jid       { get; set; }
-    [JsonPropertyName("type")]     public string? Type      { get; set; }
-    [JsonPropertyName("data")]     public Dictionary<string, object>? Data { get; set; }
+    [JsonPropertyName("jid")]       public string? Jid       { get; set; }
+    [JsonPropertyName("type")]      public string? Type      { get; set; }
+    [JsonPropertyName("data")]      public Dictionary<string, object>? Data { get; set; }
     [JsonPropertyName("timestamp")] public object? Timestamp { get; set; }
-    [JsonPropertyName("phone")]    public string? Phone     { get; set; }
-    [JsonPropertyName("name")]     public string? Name      { get; set; }
+    [JsonPropertyName("phone")]     public string? Phone     { get; set; }
+    [JsonPropertyName("name")]      public string? Name      { get; set; }
     [JsonPropertyName("creds_b64")] public string? CredsB64  { get; set; }
 }
