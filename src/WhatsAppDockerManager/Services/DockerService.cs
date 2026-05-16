@@ -7,22 +7,25 @@ namespace WhatsAppDockerManager.Services;
 
 public interface IDockerService
 {
-    // ← חדש: משוך image מה-Registry אם לא קיים מקומית (או תמיד, לפי config)
     Task<bool> PullImageAsync(string imageName);
     Task<string?> CreateAndStartContainerAsync(Phone phone);
-    // ← חדש: עצירת קונטיינר לפי ID (למשל לפני הסרה או סנכרון)  
     Task<bool> StopContainerAsync(string containerId);
     Task<bool> RemoveContainerAsync(string containerId);
-    // ← חדש: קבל מידע מפורט על קונטיינר לפי ID (כולל סטטוס, פורטים, לוגים וכו')    
     Task<ContainerInspectResponse?> InspectContainerAsync(string containerId);
     Task<bool> IsContainerRunningAsync(string containerId);
-    // ← חדש: רשימת כל הקונטיינרים של האפליקציה (כולל לא רצים)  
     Task<IList<ContainerListResponse>> ListContainersAsync(bool all = false);
     Task<bool> CheckHealthAsync(string containerId, int apiPort);
-    // ← חדש: יצירת network משותף לכל הקונטיינרים (כולל Redis) כדי שיוכלו לתקשר ביניהם  
     Task EnsureNetworkExistsAsync(string networkName);
-    // ← חדש: Redis רץ ב-container נפרד, צריך לוודא שהוא רץ לפני שמפעילים את שאר הקונטיינרים    
     Task EnsureRedisContainerRunningAsync();
+    Task<DockerImageInfo?> GetImageInfoAsync(string imageName);   // ← חדש
+}
+
+// ── Model ─────────────────────────────────────────────────────────────
+public class DockerImageInfo
+{
+    public string?       Id       { get; set; }
+    public DateTime      Created  { get; set; }
+    public List<string>? RepoTags { get; set; }
 }
 
 public class DockerService : IDockerService, IDisposable
@@ -50,8 +53,7 @@ public class DockerService : IDockerService, IDisposable
 
     private static string GetDockerUri()
     {
-        if (OperatingSystem.IsWindows())
-            return "npipe://./pipe/docker_engine";
+        if (OperatingSystem.IsWindows()) return "npipe://./pipe/docker_engine";
         return "unix:///var/run/docker.sock";
     }
 
@@ -60,22 +62,16 @@ public class DockerService : IDockerService, IDisposable
         try
         {
             _logger.LogInformation("Pulling Docker image: {ImageName}", imageName);
-
             var progress = new Progress<JSONMessage>(message =>
             {
                 if (!string.IsNullOrEmpty(message.Status))
                     _logger.LogDebug("Pull progress: {Status} {Progress}", message.Status, message.ProgressMessage);
             });
-
             var parts = imageName.Split(':');
             var name  = parts[0];
             var tag   = parts.Length > 1 ? parts[1] : "latest";
-
             await _client.Images.CreateImageAsync(
-                new ImagesCreateParameters { FromImage = name, Tag = tag },
-                null,
-                progress);
-
+                new ImagesCreateParameters { FromImage = name, Tag = tag }, null, progress);
             _logger.LogInformation("Successfully pulled image: {ImageName}", imageName);
             return true;
         }
@@ -86,22 +82,48 @@ public class DockerService : IDockerService, IDisposable
         }
     }
 
+    // ── GetImageInfoAsync ─────────────────────────────────────────────
+    public async Task<DockerImageInfo?> GetImageInfoAsync(string imageName)
+    {
+        try
+        {
+            var images = await _client.Images.ListImagesAsync(
+                new ImagesListParameters
+                {
+                    Filters = new Dictionary<string, IDictionary<string, bool>>
+                    {
+                        ["reference"] = new Dictionary<string, bool> { [imageName] = true }
+                    }
+                });
+
+            var img = images.FirstOrDefault();
+            if (img == null) return null;
+
+            return new DockerImageInfo
+            {
+                Id       = img.ID,
+                Created  = DateTimeOffset.FromUnixTimeSeconds(img.Created).UtcDateTime,
+                RepoTags = img.RepoTags?.ToList(),
+            };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not get image info for {Image}", imageName);
+            return null;
+        }
+    }
+
     public async Task<string?> CreateAndStartContainerAsync(Phone phone)
     {
         try
         {
             var containerName = $"whatsapp_{phone.Number.Replace("+", "")}";
-            var phoneIndex    = phone.Number.Replace("+", "");  // ← כל המספר, לא 3 ספרות
+            var phoneIndex    = phone.Number.Replace("+", "");
+            var (fastApiPort, baileysPort) = PortHashCalculator.GetBothPorts(phone.Number, _configuration);
 
-            // ── חישוב ports לפי hash ─────────────────────────────
-            var (fastApiPort, baileysPort) = PortHashCalculator.GetBothPorts(
-                phone.Number, _configuration);
-
-            _logger.LogInformation(
-                "Phone {Phone} → FastAPI:{FastApi} Baileys:{Baileys}",
+            _logger.LogInformation("Phone {Phone} → FastAPI:{FastApi} Baileys:{Baileys}",
                 phone.Number, fastApiPort, baileysPort);
 
-            // ── Data paths (ללא redis — Redis רץ בcontainer נפרד) ──
             var basePath     = _dockerSettings.DataBasePath;
             var authPath     = Path.Combine(basePath, $"auth_{phoneIndex}");
             var logsPath     = Path.Combine(basePath, $"logs_{phoneIndex}");
@@ -114,7 +136,6 @@ public class DockerService : IDockerService, IDisposable
                 Directory.CreateDirectory(contactsPath);
             }
 
-            // ── בדוק אם קונטיינר קיים ומחק ──────────────────────
             var existingContainers = await _client.Containers
                 .ListContainersAsync(new ContainersListParameters { All = true });
             var existing = existingContainers.FirstOrDefault(c =>
@@ -135,7 +156,7 @@ public class DockerService : IDockerService, IDisposable
                         $"TZ={_dockerSettings.Timezone}",
                         $"PHONE_NUMBER={phone.Number}",
                         $"PHONE_ID={phone.Id}",
-                        $"REDIS_URL=redis://{RedisContainerName}:6379",  // ← Redis חיצוני
+                        $"REDIS_URL=redis://{RedisContainerName}:6379",
                     },
                     ExposedPorts = new Dictionary<string, EmptyStruct>
                     {
@@ -146,21 +167,14 @@ public class DockerService : IDockerService, IDisposable
                     {
                         PortBindings = new Dictionary<string, IList<PortBinding>>
                         {
-                            {
-                                "8000/tcp",
-                                new List<PortBinding> { new() { HostPort = fastApiPort.ToString() } }
-                            },
-                            {
-                                "3001/tcp",
-                                new List<PortBinding> { new() { HostPort = baileysPort.ToString() } }
-                            }
+                            { "8000/tcp", new List<PortBinding> { new() { HostPort = fastApiPort.ToString() } } },
+                            { "3001/tcp", new List<PortBinding> { new() { HostPort = baileysPort.ToString() } } }
                         },
                         Binds = new List<string>
                         {
                             $"{authPath}:/app/auth_info",
                             $"{logsPath}:/var/log",
                             $"{contactsPath}:/app/data"
-                            // ← הוסר: redisPath:/var/lib/redis
                         },
                         RestartPolicy = new RestartPolicy { Name = RestartPolicyKind.UnlessStopped },
                         Memory    = 512 * 1024 * 1024,
@@ -185,15 +199,11 @@ public class DockerService : IDockerService, IDisposable
                 return null;
             }
 
-            // ── חבר ל-network כדי לדבר עם redis_shared ───────────
-            await _client.Networks.ConnectNetworkAsync(
-                NetworkName,
+            await _client.Networks.ConnectNetworkAsync(NetworkName,
                 new NetworkConnectParameters { Container = createResponse.ID });
 
-            _logger.LogInformation(
-                "Container {Name} started and connected to {Network}. FastAPI:{FastApi} Baileys:{Baileys}",
-                containerName, NetworkName, fastApiPort, baileysPort);
-
+            _logger.LogInformation("Container {Name} started. FastAPI:{FastApi} Baileys:{Baileys}",
+                containerName, fastApiPort, baileysPort);
             return createResponse.ID;
         }
         catch (Exception ex)
@@ -207,66 +217,37 @@ public class DockerService : IDockerService, IDisposable
     {
         try
         {
-            await _client.Containers.StopContainerAsync(containerId, new ContainerStopParameters
-            {
-                WaitBeforeKillSeconds = 10
-            });
+            await _client.Containers.StopContainerAsync(containerId,
+                new ContainerStopParameters { WaitBeforeKillSeconds = 10 });
             _logger.LogInformation("Container {ContainerId} stopped", containerId);
             return true;
         }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error stopping container {ContainerId}", containerId);
-            return false;
-        }
+        catch (Exception ex) { _logger.LogError(ex, "Error stopping container {ContainerId}", containerId); return false; }
     }
 
     public async Task<bool> RemoveContainerAsync(string containerId)
     {
         try
         {
-            try { await StopContainerAsync(containerId); }
-            catch { }
-
-            await _client.Containers.RemoveContainerAsync(containerId, new ContainerRemoveParameters
-            {
-                Force         = true,
-                RemoveVolumes = false
-            });
+            try { await StopContainerAsync(containerId); } catch { }
+            await _client.Containers.RemoveContainerAsync(containerId,
+                new ContainerRemoveParameters { Force = true, RemoveVolumes = false });
             _logger.LogInformation("Container {ContainerId} removed", containerId);
             return true;
         }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error removing container {ContainerId}", containerId);
-            return false;
-        }
+        catch (Exception ex) { _logger.LogError(ex, "Error removing container {ContainerId}", containerId); return false; }
     }
 
     public async Task<ContainerInspectResponse?> InspectContainerAsync(string containerId)
     {
-        try
-        {
-            return await _client.Containers.InspectContainerAsync(containerId);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error inspecting container {ContainerId}", containerId);
-            return null;
-        }
+        try { return await _client.Containers.InspectContainerAsync(containerId); }
+        catch (Exception ex) { _logger.LogError(ex, "Error inspecting container {ContainerId}", containerId); return null; }
     }
 
     public async Task<bool> IsContainerRunningAsync(string containerId)
     {
-        try
-        {
-            var inspection = await InspectContainerAsync(containerId);
-            return inspection?.State?.Running ?? false;
-        }
-        catch
-        {
-            return false;
-        }
+        try { var i = await InspectContainerAsync(containerId); return i?.State?.Running ?? false; }
+        catch { return false; }
     }
 
     public async Task<IList<ContainerListResponse>> ListContainersAsync(bool all = false)
@@ -282,126 +263,82 @@ public class DockerService : IDockerService, IDisposable
                 }
             });
         }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error listing containers");
-            return new List<ContainerListResponse>();
-        }
+        catch (Exception ex) { _logger.LogError(ex, "Error listing containers"); return new List<ContainerListResponse>(); }
     }
 
     public async Task<bool> CheckHealthAsync(string containerId, int apiPort)
     {
         try
         {
-            if (!await IsContainerRunningAsync(containerId))
-                return false;
-
+            if (!await IsContainerRunningAsync(containerId)) return false;
             using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
             var response = await httpClient.GetAsync($"http://localhost:{apiPort}/health");
             return response.IsSuccessStatusCode;
         }
-        catch
-        {
-            return false;
-        }
+        catch { return false; }
     }
+
     public async Task EnsureNetworkExistsAsync(string networkName)
-{
-    try
     {
-        var networks = await _client.Networks.ListNetworksAsync(new NetworksListParameters
+        try
         {
-            Filters = new Dictionary<string, IDictionary<string, bool>>
+            var networks = await _client.Networks.ListNetworksAsync(new NetworksListParameters
             {
-                { "name", new Dictionary<string, bool> { { networkName, true } } }
+                Filters = new Dictionary<string, IDictionary<string, bool>>
+                {
+                    { "name", new Dictionary<string, bool> { { networkName, true } } }
+                }
+            });
+            if (networks.Any(n => n.Name == networkName))
+            {
+                _logger.LogInformation("Network {Network} already exists", networkName);
+                return;
             }
-        });
-
-        if (networks.Any(n => n.Name == networkName))
-        {
-            _logger.LogInformation("Network {Network} already exists", networkName);
-            return;
+            await _client.Networks.CreateNetworkAsync(new NetworksCreateParameters { Name = networkName, Driver = "bridge" });
+            _logger.LogInformation("Created Docker network: {Network}", networkName);
         }
-
-        await _client.Networks.CreateNetworkAsync(new NetworksCreateParameters
-        {
-            Name   = networkName,
-            Driver = "bridge"
-        });
-
-        _logger.LogInformation("Created Docker network: {Network}", networkName);
+        catch (Exception ex) { _logger.LogError(ex, "Failed to ensure network {Network} exists", networkName); throw; }
     }
-    catch (Exception ex)
+
+    public async Task EnsureRedisContainerRunningAsync()
     {
-        _logger.LogError(ex, "Failed to ensure network {Network} exists", networkName);
-        throw;
-    }
-}
-public async Task EnsureRedisContainerRunningAsync()
-{
-    const string containerName = "redis_shared";
-    const string imageName = "redis:7-alpine";
-    const string networkName = "whatsapp_network";
-
-    try
-    {
-        // בדוק אם כבר רץ
-        var containers = await _client.Containers.ListContainersAsync(
-            new ContainersListParameters { All = true });
-
-        var existing = containers.FirstOrDefault(c =>
-            c.Names.Any(n => n.TrimStart('/') == containerName));
-
-        if (existing != null)
+        const string containerName = "redis_shared";
+        const string imageName     = "redis:7-alpine";
+        const string networkName   = "whatsapp_network";
+        try
         {
-            if (existing.State == "running")
+            var containers = await _client.Containers.ListContainersAsync(
+                new ContainersListParameters { All = true });
+            var existing = containers.FirstOrDefault(c =>
+                c.Names.Any(n => n.TrimStart('/') == containerName));
+
+            if (existing != null)
             {
-                _logger.LogInformation("Redis container already running");
+                if (existing.State == "running") { _logger.LogInformation("Redis container already running"); return; }
+                await _client.Containers.StartContainerAsync(existing.ID, new ContainerStartParameters());
+                _logger.LogInformation("Started existing Redis container");
                 return;
             }
 
-            // קיים אבל לא רץ — הפעל אותו
-            await _client.Containers.StartContainerAsync(
-                existing.ID, new ContainerStartParameters());
-            _logger.LogInformation("Started existing Redis container");
-            return;
-        }
+            await PullImageAsync(imageName);
 
-        // משוך image אם צריך
-        await PullImageAsync(imageName);
-
-        // צור container חדש
-        var response = await _client.Containers.CreateContainerAsync(
-            new CreateContainerParameters
+            var response = await _client.Containers.CreateContainerAsync(new CreateContainerParameters
             {
-                Image = imageName,
-                Name  = containerName,
+                Image      = imageName,
+                Name       = containerName,
                 HostConfig = new HostConfig
                 {
                     RestartPolicy = new RestartPolicy { Name = RestartPolicyKind.UnlessStopped },
                     Memory = 256 * 1024 * 1024,
                 }
             });
-
-        await _client.Containers.StartContainerAsync(
-            response.ID, new ContainerStartParameters());
-
-        // חבר ל-network
-        await _client.Networks.ConnectNetworkAsync(networkName,
-            new NetworkConnectParameters { Container = response.ID });
-
-        _logger.LogInformation("Redis container created and started");
+            await _client.Containers.StartContainerAsync(response.ID, new ContainerStartParameters());
+            await _client.Networks.ConnectNetworkAsync(networkName,
+                new NetworkConnectParameters { Container = response.ID });
+            _logger.LogInformation("Redis container created and started");
+        }
+        catch (Exception ex) { _logger.LogError(ex, "Failed to ensure Redis container"); throw; }
     }
-    catch (Exception ex)
-    {
-        _logger.LogError(ex, "Failed to ensure Redis container");
-        throw;
-    }
-}
 
-    public void Dispose()
-    {
-        _client?.Dispose();
-    }
-    
+    public void Dispose() { _client?.Dispose(); }
 }
