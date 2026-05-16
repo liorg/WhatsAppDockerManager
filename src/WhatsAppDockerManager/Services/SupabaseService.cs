@@ -273,15 +273,18 @@ public class SupabaseService : ISupabaseService
     #endregion
 
     #region Phone Operations
+// ════════════════════════════════════════════════════════════════════
+// SupabaseService.cs — GetOrCreatePhoneAsync תיקון Nickname → Label
+// ════════════════════════════════════════════════════════════════════
+
 public async Task<(Phone phone, bool created)> GetOrCreatePhoneAsync(
     string phoneNumber,
     Guid userId,
     string? nickname = null)
 {
-    // נקה מספר
-    var clean = new string(phoneNumber.Where(char.IsDigit).ToArray());
+    var clean    = new string(phoneNumber.Where(char.IsDigit).ToArray());
     var withPlus = "+" + clean;
- 
+
     try
     {
         // ── בדוק אם קיים לאותו user ────────────────────────────────
@@ -290,36 +293,36 @@ public async Task<(Phone phone, bool created)> GetOrCreatePhoneAsync(
             .Where(p => p.Number == clean || p.Number == withPlus)
             .Limit(1)
             .Get();
- 
+
         if (existing.Models.Any())
         {
             var phone = existing.Models.First();
             _logger.LogInformation(
                 "[PROVISION] Phone {Number} already exists for user {UserId} → id={Id}",
                 clean, userId, phone.Id);
-            return (phone, false);   // ← קיים, לא נוצר
+            return (phone, false);
         }
- 
+
         // ── צור חדש ────────────────────────────────────────────────
         var newPhone = new Phone
         {
-            Id        = Guid.NewGuid(),
-            Number    = withPlus,
-            UserId    = userId,
-            Nickname  = nickname,
-            Status    = "active",
+            Id           = Guid.NewGuid(),
+            Number       = withPlus,
+            UserId       = userId,
+            Label        = nickname,          // ← Label במקום Nickname
+            Status       = "active",
             DockerStatus = PhoneDockerStatus.Pending,
-            CreatedAt = DateTime.UtcNow,
+            CreatedAt    = DateTime.UtcNow,
         };
- 
+
         var response = await _client.From<Phone>().Insert(newPhone);
         var created  = response.Models.First();
- 
+
         _logger.LogInformation(
             "[PROVISION] Created new phone {Number} for user {UserId} → id={Id}",
             clean, userId, created.Id);
- 
-        return (created, true);   // ← חדש, נוצר
+
+        return (created, true);
     }
     catch (Exception ex)
     {
@@ -327,7 +330,7 @@ public async Task<(Phone phone, bool created)> GetOrCreatePhoneAsync(
         throw;
     }
 }
- 
+
 public async Task DetachPhoneFromHostAsync(Guid phoneId)
 {
     try
