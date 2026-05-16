@@ -70,6 +70,7 @@ public interface ISupabaseService
     Task DetachPhoneFromHostAsync(Guid phoneId);
 
     Task ClearPhoneForLogoutAsync(Guid phoneId);
+    Task<(Phone phone, bool created)> GetOrCreatePhoneAsync(string phoneNumber, Guid userId, string? nickname = null);
 }
 
 public class SupabaseService : ISupabaseService
@@ -272,7 +273,61 @@ public class SupabaseService : ISupabaseService
     #endregion
 
     #region Phone Operations
-
+public async Task<(Phone phone, bool created)> GetOrCreatePhoneAsync(
+    string phoneNumber,
+    Guid userId,
+    string? nickname = null)
+{
+    // נקה מספר
+    var clean = new string(phoneNumber.Where(char.IsDigit).ToArray());
+    var withPlus = "+" + clean;
+ 
+    try
+    {
+        // ── בדוק אם קיים לאותו user ────────────────────────────────
+        var existing = await _client.From<Phone>()
+            .Where(p => p.UserId == userId)
+            .Where(p => p.Number == clean || p.Number == withPlus)
+            .Limit(1)
+            .Get();
+ 
+        if (existing.Models.Any())
+        {
+            var phone = existing.Models.First();
+            _logger.LogInformation(
+                "[PROVISION] Phone {Number} already exists for user {UserId} → id={Id}",
+                clean, userId, phone.Id);
+            return (phone, false);   // ← קיים, לא נוצר
+        }
+ 
+        // ── צור חדש ────────────────────────────────────────────────
+        var newPhone = new Phone
+        {
+            Id        = Guid.NewGuid(),
+            Number    = withPlus,
+            UserId    = userId,
+            Nickname  = nickname,
+            Status    = "active",
+            DockerStatus = PhoneDockerStatus.Pending,
+            CreatedAt = DateTime.UtcNow,
+        };
+ 
+        var response = await _client.From<Phone>().Insert(newPhone);
+        var created  = response.Models.First();
+ 
+        _logger.LogInformation(
+            "[PROVISION] Created new phone {Number} for user {UserId} → id={Id}",
+            clean, userId, created.Id);
+ 
+        return (created, true);   // ← חדש, נוצר
+    }
+    catch (Exception ex)
+    {
+        _logger.LogError(ex, "[PROVISION] Error in GetOrCreatePhoneAsync for {Number}", phoneNumber);
+        throw;
+    }
+}
+ 
 public async Task DetachPhoneFromHostAsync(Guid phoneId)
 {
     try
