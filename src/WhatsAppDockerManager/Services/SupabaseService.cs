@@ -748,7 +748,7 @@ public async Task<Contact> CreateDraftContactAsync(
     string? name = null)
 {
     var cleanLid = lid?.Contains('@') == true ? lid.Split('@')[0] : lid;
-
+ 
     // ── 1. חפש לפי LID תחילה (אם יש) ────────────────────────────
     if (!string.IsNullOrEmpty(cleanLid))
     {
@@ -758,7 +758,7 @@ public async Task<Contact> CreateDraftContactAsync(
             _logger.LogInformation(
                 "[DRAFT] Contact with LID={Lid} already exists: {Id}",
                 cleanLid, byLid.Id);
-
+ 
             // עדכן שם אם חסר
             bool needsUpdate = false;
             if (!string.IsNullOrEmpty(name) && string.IsNullOrEmpty(byLid.WhatsappName))
@@ -777,7 +777,7 @@ public async Task<Contact> CreateDraftContactAsync(
             return byLid;
         }
     }
-
+ 
     // ── 2. חפש לפי number ─────────────────────────────────────────
     var byNumber = await GetContactByNumberAsync(phoneId, contactNumber);
     if (byNumber != null)
@@ -785,9 +785,9 @@ public async Task<Contact> CreateDraftContactAsync(
         _logger.LogInformation(
             "[DRAFT] Contact with number={Number} already exists: {Id}",
             contactNumber, byNumber.Id);
-
+ 
         bool needsUpdate = false;
-
+ 
         // עדכן LID רק אם ריק או bogus
         if (!string.IsNullOrEmpty(cleanLid) && string.IsNullOrEmpty(byNumber.Lid))
         {
@@ -803,7 +803,7 @@ public async Task<Contact> CreateDraftContactAsync(
             return await UpdateContactAsync(byNumber);
         return byNumber;
     }
-
+ 
     // ── 3. צור חדש — עם try/catch לconflict ────────────────────────
     try
     {
@@ -826,20 +826,21 @@ public async Task<Contact> CreateDraftContactAsync(
         _logger.LogWarning(
             "[DRAFT] Duplicate key on insert for LID={Lid} number={Number} — fetching existing",
             cleanLid, contactNumber);
-
+ 
         if (!string.IsNullOrEmpty(cleanLid))
         {
             var existing = await GetContactByLidAsync(phoneId, cleanLid);
             if (existing != null) return existing;
         }
-
+ 
         var existingByNum = await GetContactByNumberAsync(phoneId, contactNumber);
         if (existingByNum != null) return existingByNum;
-
+ 
         // לא אמור להגיע לכאן
         throw;
     }
 }
+ 
 
     #endregion
 
@@ -1160,21 +1161,31 @@ public async Task<PingSender?> MatchPingSenderByLidAsync(Guid phoneId, string li
 {
     try
     {
-        // מצא ping pending לפי מספר הטלפון של ה-contact
-        var contact = await GetContactByIdAsync(contactId);
+        var contact    = await GetContactByIdAsync(contactId);
         if (contact == null) return null;
-
+ 
         var pingSender = await GetPendingPingSenderAsync(phoneId, contact.Number);
+        if (pingSender == null)
+        {
+            // fallback: חפש פי phone_id בלבד (אם target_number לא תואם)
+            var latest = await GetLatestPendingPingSenderAsync(phoneId);
+            pingSender = latest;
+        }
         if (pingSender == null) return null;
-
-        // עדכן את ה-match
-        pingSender.Lid = lid;
+ 
+        // עדכן ping_sender
+        pingSender.Lid       = lid;
         pingSender.ContactId = contactId;
-        pingSender.Status = "matched";
+        pingSender.Status    = "matched";
         pingSender.MatchedAt = DateTime.UtcNow;
-
         await _client.From<PingSender>().Update(pingSender);
-        _logger.LogInformation("Matched PingSender {Id} with LID {Lid}", pingSender.Id, lid);
+ 
+        // עדכן contact.ping_sender_id (קשר ישיר)
+        contact.PingSenderId = pingSender.Id;  // ← חדש
+        await _client.From<Contact>().Update(contact);
+ 
+        _logger.LogInformation("[MATCH] Draft {ContactId} ↔ PingSender {PsSenderId}",
+            contactId, pingSender.Id);
         return pingSender;
     }
     catch (Exception ex)
@@ -1182,7 +1193,7 @@ public async Task<PingSender?> MatchPingSenderByLidAsync(Guid phoneId, string li
         _logger.LogError(ex, "Error matching PingSender by LID");
         return null;
     }
-} 
+}
 public async Task ClearPhoneForLogoutAsync(Guid phoneId)
 {
     var phone = await GetPhoneByIdAsync(phoneId);
