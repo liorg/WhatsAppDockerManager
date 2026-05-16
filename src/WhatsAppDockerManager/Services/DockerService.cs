@@ -102,7 +102,7 @@ public class DockerService : IDockerService, IDisposable
             return new DockerImageInfo
             {
                 Id       = img.ID,
-                Created  = DateTimeOffset.FromUnixTimeSeconds(img.Created).UtcDateTime,
+                Created  = img.Created,
                 RepoTags = img.RepoTags?.ToList(),
             };
         }
