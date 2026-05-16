@@ -736,33 +736,110 @@ public async Task UpdatePhoneUserIdAsync(Guid phoneId, Guid userId)
         });
     }
 
-    public async Task<Contact> CreateDraftContactAsync(Guid phoneId, string contactNumber, string? lid = null, string? name = null)
-    {
-        // בדוק אם כבר קיים (מניעת כפילות)
-        var existing = await GetContactByNumberAsync(phoneId, contactNumber);
-        if (existing != null)
-        {
-            // עדכן LID אם חסר
-            if (string.IsNullOrEmpty(existing.Lid) && !string.IsNullOrEmpty(lid))
-            {
-                existing.Lid = lid;
-                if (!string.IsNullOrEmpty(name) && string.IsNullOrEmpty(existing.Name))
-                    existing.Name = name;
-                return await UpdateContactAsync(existing);
-            }
-            return existing;
-        }
+// ════════════════════════════════════════════════════════════════════
+// SupabaseService.cs — תיקון CreateDraftContactAsync
+// מטפל ב-duplicate key על (lid, phone_id)
+// ════════════════════════════════════════════════════════════════════
 
+public async Task<Contact> CreateDraftContactAsync(
+    Guid phoneId,
+    string contactNumber,
+    string? lid = null,
+    string? name = null)
+{
+    var cleanLid = lid?.Contains('@') == true ? lid.Split('@')[0] : lid;
+
+    // ── 1. חפש לפי LID תחילה (אם יש) ────────────────────────────
+    if (!string.IsNullOrEmpty(cleanLid))
+    {
+        var byLid = await GetContactByLidAsync(phoneId, cleanLid);
+        if (byLid != null)
+        {
+            _logger.LogInformation(
+                "[DRAFT] Contact with LID={Lid} already exists: {Id}",
+                cleanLid, byLid.Id);
+
+            // עדכן שם אם חסר
+            bool needsUpdate = false;
+            if (!string.IsNullOrEmpty(name) && string.IsNullOrEmpty(byLid.WhatsappName))
+            {
+                byLid.WhatsappName = name;
+                needsUpdate = true;
+            }
+            if (!string.IsNullOrEmpty(name) &&
+                (string.IsNullOrEmpty(byLid.Name) || byLid.Name == byLid.Number))
+            {
+                byLid.Name = name;
+                needsUpdate = true;
+            }
+            if (needsUpdate)
+                return await UpdateContactAsync(byLid);
+            return byLid;
+        }
+    }
+
+    // ── 2. חפש לפי number ─────────────────────────────────────────
+    var byNumber = await GetContactByNumberAsync(phoneId, contactNumber);
+    if (byNumber != null)
+    {
+        _logger.LogInformation(
+            "[DRAFT] Contact with number={Number} already exists: {Id}",
+            contactNumber, byNumber.Id);
+
+        bool needsUpdate = false;
+
+        // עדכן LID רק אם ריק או bogus
+        if (!string.IsNullOrEmpty(cleanLid) && string.IsNullOrEmpty(byNumber.Lid))
+        {
+            byNumber.Lid = cleanLid;
+            needsUpdate  = true;
+        }
+        if (!string.IsNullOrEmpty(name) && string.IsNullOrEmpty(byNumber.WhatsappName))
+        {
+            byNumber.WhatsappName = name;
+            needsUpdate = true;
+        }
+        if (needsUpdate)
+            return await UpdateContactAsync(byNumber);
+        return byNumber;
+    }
+
+    // ── 3. צור חדש — עם try/catch לconflict ────────────────────────
+    try
+    {
         return await CreateContactAsync(new Contact
         {
-            PhoneId   = phoneId,
-            Number    = contactNumber,
-            Lid       = lid,
-            Name      = name ?? contactNumber, // pushName או המספר כ-fallback
-            Tag       = "draft",              // ← ממתין לזיהוי ע"י המשתמש
-            IsConnect = false,
+            PhoneId      = phoneId,
+            Number       = contactNumber,
+            Lid          = cleanLid,
+            Name         = name ?? contactNumber,
+            WhatsappName = name,
+            Tag          = "draft",
+            IsConnect    = false,
         });
     }
+    catch (Exception ex) when (ex.Message.Contains("23505") ||
+                               ex.Message.Contains("duplicate key") ||
+                               ex.Message.Contains("unique constraint"))
+    {
+        // race condition — מישהו יצר בינתיים, שלוף ותחזיר
+        _logger.LogWarning(
+            "[DRAFT] Duplicate key on insert for LID={Lid} number={Number} — fetching existing",
+            cleanLid, contactNumber);
+
+        if (!string.IsNullOrEmpty(cleanLid))
+        {
+            var existing = await GetContactByLidAsync(phoneId, cleanLid);
+            if (existing != null) return existing;
+        }
+
+        var existingByNum = await GetContactByNumberAsync(phoneId, contactNumber);
+        if (existingByNum != null) return existingByNum;
+
+        // לא אמור להגיע לכאן
+        throw;
+    }
+}
 
     #endregion
 
