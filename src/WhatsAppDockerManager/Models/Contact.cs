@@ -9,6 +9,10 @@ public class Contact : BaseModel
     [PrimaryKey("id")]
     public Guid Id { get; set; }
     
+    [JsonPropertyName("ping_sender_id")]
+    [Column("ping_sender_id")]
+    public Guid? PingSenderId { get; set; }
+    
     [Column("whatsapp_name")]
     public string? WhatsappName { get; set; }
   
