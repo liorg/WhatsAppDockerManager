@@ -37,7 +37,8 @@ public interface ISupabaseService
     Task<Contact> UpdateContactAsync(Contact contact);
     Task<Contact> GetOrCreateContactAsync(Guid phoneId, string contactNumber, string? name = null);
     Task<Contact> UpsertContactAsync(Guid phoneId, string contactNumber, string? name = null, string? lid = null);
-    Task<Contact> CreateDraftContactAsync(Guid phoneId, string contactNumber, string? lid = null, string? name = null);
+    Task<Contact> CreateDraftContactAsync(Guid phoneId, string contactNumber, string? lid = null,
+     string? name = null,  Guid? userId = null);
 
     // Message operations
     Task<Message?> GetMessageByIdAsync(Guid messageId);
@@ -60,7 +61,7 @@ public interface ISupabaseService
      string? leafId = null, string? whatsappMessageId = null);
 
      // PingSender operations
-    Task<PingSender> CreatePingSenderAsync(Guid phoneId, string targetNumber, string? pingMessageId);
+    Task<PingSender> CreatePingSenderAsync(Guid phoneId, string targetNumber, string? pingMessageId, Guid? userId = null);
     Task<PingSender?> GetPendingPingSenderAsync(Guid phoneId, string targetNumber);
     Task<PingSender?> GetLatestPendingPingSenderAsync(Guid phoneId);
 
@@ -879,7 +880,7 @@ public async Task<Contact> CreateDraftContactAsync(
     Guid phoneId,
     string contactNumber,
     string? lid = null,
-    string? name = null)
+    string? name = null,  Guid? userId = null)
 {
     var cleanLid = lid?.Contains('@') == true ? lid.Split('@')[0] : lid;
  
@@ -950,7 +951,8 @@ public async Task<Contact> CreateDraftContactAsync(
             WhatsappName = name,
             Tag          = "draft",
             IsConnect    = false,
-            CreatedAt    = DateTime.UtcNow,  // ← תמיד מאוכלס
+            CreatedAt    = DateTime.UtcNow,  
+                UserId       = userId
             });
     }
     catch (Exception ex) when (ex.Message.Contains("23505") ||
@@ -1236,7 +1238,7 @@ public async Task UpdatePhoneCredsAsync(Guid phoneId, string credsBase64)
 
     #region PingSender Operations
 
-public async Task<PingSender> CreatePingSenderAsync(Guid phoneId, string targetNumber, string? pingMessageId)
+public async Task<PingSender> CreatePingSenderAsync(Guid phoneId, string targetNumber, string? pingMessageId, Guid? userId = null)
 {
     var pingSender = new PingSender
     {
@@ -1245,7 +1247,8 @@ public async Task<PingSender> CreatePingSenderAsync(Guid phoneId, string targetN
         TargetNumber = targetNumber,
         PingMessageId = pingMessageId,
         Status = "pending",
-        CreatedAt = DateTime.UtcNow
+        CreatedAt = DateTime.UtcNow ,
+        UserId = userId
     };
 
     var response = await _client.From<PingSender>().Insert(pingSender);

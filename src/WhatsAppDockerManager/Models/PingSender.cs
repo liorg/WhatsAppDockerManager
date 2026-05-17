@@ -32,4 +32,12 @@ public class PingSender : BaseModel
 
     [Column("matched_at")]
     public DateTime? MatchedAt { get; set; }
+
+
+    [Column("user_id")]
+    public Guid? UserId { get; set; }
+
+    [Column("updated_at")]
+    public DateTime? UpdatedAt { get; set; }
+
 }
