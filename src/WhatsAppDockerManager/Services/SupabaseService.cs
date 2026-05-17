@@ -71,6 +71,10 @@ public interface ISupabaseService
 
     Task ClearPhoneForLogoutAsync(Guid phoneId);
     Task<(Phone phone, bool created)> GetOrCreatePhoneAsync(string phoneNumber, Guid userId, string? nickname = null);
+
+    Task<PingSender?> GetPingSenderByMessageIdAsync(Guid phoneId, string pingMessageId);
+    Task UpdatePingSenderAsync(PingSender pingSender);
+
 }
 
 public class SupabaseService : ISupabaseService
@@ -273,6 +277,112 @@ public class SupabaseService : ISupabaseService
     #endregion
 
     #region Phone Operations
+
+
+
+// ════════════════════════════════════════════════════════════════════
+// הוסף ל-SupabaseService class:
+// ════════════════════════════════════════════════════════════════════
+
+// חפש ping_sender לפי ping_message_id (whatsapp message id של ה-PING)
+public async Task<PingSender?> GetPingSenderByMessageIdAsync(Guid phoneId, string pingMessageId)
+{
+    try
+    {
+        var response = await _client.From<PingSender>()
+            .Where(p => p.PhoneId == phoneId)
+            .Where(p => p.PingMessageId == pingMessageId)
+            .Limit(1)
+            .Get();
+        return response.Models.FirstOrDefault();
+    }
+    catch (Exception ex)
+    {
+        _logger.LogError(ex, "Error getting PingSender by messageId {MsgId}", pingMessageId);
+        return null;
+    }
+}
+
+public async Task UpdatePingSenderAsync(PingSender pingSender)
+{
+    try
+    {
+        await _client.From<PingSender>().Update(pingSender);
+        _logger.LogInformation("Updated PingSender {Id}", pingSender.Id);
+    }
+    catch (Exception ex)
+    {
+        _logger.LogError(ex, "Error updating PingSender {Id}", pingSender.Id);
+        throw;
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════
+// MatchPingSenderByLidAsync — תיקון: חיפוש לפי phoneId בלבד
+// כי draft.Number = LID ≠ ping_sender.target_number
+// ════════════════════════════════════════════════════════════════════
+
+public async Task<PingSender?> MatchPingSenderByLidAsync(Guid phoneId, string lid, Guid contactId)
+{
+    try
+    {
+        // חפש pending לפי phoneId בלבד — לא לפי target_number
+        // כי draft contact נוצר עם Number=LID, לא מספר טלפון
+        var ps = await GetLatestPendingPingSenderAsync(phoneId);
+        if (ps == null)
+        {
+            _logger.LogInformation("[MATCH] No pending ping_sender for phone {PhoneId}", phoneId);
+            return null;
+        }
+
+        // עדכן ping_sender עם LID + draft contact
+        ps.Lid       = lid;
+        ps.ContactId = contactId;
+        ps.Status    = "matched";
+        ps.MatchedAt = DateTime.UtcNow;
+        await _client.From<PingSender>().Update(ps);
+
+        // עדכן draft contact עם ping_sender_id
+        var draftContact = await GetContactByIdAsync(contactId);
+        if (draftContact != null && draftContact.PingSenderId == null)
+        {
+            draftContact.PingSenderId = ps.Id;
+            await _client.From<Contact>().Update(draftContact);
+        }
+
+        _logger.LogInformation("[MATCH] draft={ContactId} (LID={Lid}) ↔ ping_sender={PsId}",
+            contactId, lid, ps.Id);
+        return ps;
+    }
+    catch (Exception ex)
+    {
+        _logger.LogError(ex, "[MATCH] Error for phone {PhoneId}", phoneId);
+        return null;
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════
+// GetLatestPendingPingSenderAsync — רק status=pending
+// ════════════════════════════════════════════════════════════════════
+
+public async Task<PingSender?> GetLatestPendingPingSenderAsync(Guid phoneId)
+{
+    try
+    {
+        var response = await _client.From<PingSender>()
+            .Where(p => p.PhoneId == phoneId)
+            .Where(p => p.Status == "pending")   // רק pending — לא matched/completed
+            .Order(p => p.CreatedAt, Supabase.Postgrest.Constants.Ordering.Descending)
+            .Limit(1)
+            .Get();
+        return response.Models.FirstOrDefault();
+    }
+    catch (Exception ex)
+    {
+        _logger.LogError(ex, "Error getting latest pending PingSender for phone {PhoneId}", phoneId);
+        return null;
+    }
+}
 // ════════════════════════════════════════════════════════════════════
 // SupabaseService.cs — GetOrCreatePhoneAsync תיקון Nickname → Label
 // ════════════════════════════════════════════════════════════════════
@@ -1138,62 +1248,9 @@ public async Task<PingSender?> GetPendingPingSenderAsync(Guid phoneId, string ta
     }
 }
 
-public async Task<PingSender?> GetLatestPendingPingSenderAsync(Guid phoneId)
-{
-    try
-    {
-        // חפש pending או matched — כדי לזהות PING שנשלח לאחרונה
-        var response = await _client.From<PingSender>()
-            .Where(p => p.PhoneId == phoneId)
-            .Order(p => p.CreatedAt, Supabase.Postgrest.Constants.Ordering.Descending)
-            .Limit(1)
-            .Get();
-        return response.Models.FirstOrDefault();
-    }
-    catch (Exception ex)
-    {
-        _logger.LogError(ex, "Error getting latest pending PingSender for phone {PhoneId}", phoneId);
-        return null;
-    }
-}
 
-public async Task<PingSender?> MatchPingSenderByLidAsync(Guid phoneId, string lid, Guid contactId)
-{
-    try
-    {
-        var contact    = await GetContactByIdAsync(contactId);
-        if (contact == null) return null;
- 
-        var pingSender = await GetPendingPingSenderAsync(phoneId, contact.Number);
-        if (pingSender == null)
-        {
-            // fallback: חפש פי phone_id בלבד (אם target_number לא תואם)
-            var latest = await GetLatestPendingPingSenderAsync(phoneId);
-            pingSender = latest;
-        }
-        if (pingSender == null) return null;
- 
-        // עדכן ping_sender
-        pingSender.Lid       = lid;
-        pingSender.ContactId = contactId;
-        pingSender.Status    = "matched";
-        pingSender.MatchedAt = DateTime.UtcNow;
-        await _client.From<PingSender>().Update(pingSender);
- 
-        // עדכן contact.ping_sender_id (קשר ישיר)
-        contact.PingSenderId = pingSender.Id;  // ← חדש
-        await _client.From<Contact>().Update(contact);
- 
-        _logger.LogInformation("[MATCH] Draft {ContactId} ↔ PingSender {PsSenderId}",
-            contactId, pingSender.Id);
-        return pingSender;
-    }
-    catch (Exception ex)
-    {
-        _logger.LogError(ex, "Error matching PingSender by LID");
-        return null;
-    }
-}
+
+
 public async Task ClearPhoneForLogoutAsync(Guid phoneId)
 {
     var phone = await GetPhoneByIdAsync(phoneId);
