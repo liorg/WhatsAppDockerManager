@@ -245,12 +245,11 @@ public class WebhookController : ControllerBase
                 _logger.LogInformation("[MSG] Created draft contact {Id} lid={Lid}", contact.Id, contactLid);
             }
 
-            // ── MatchPingSender — קשר draft ← ping_sender ─────────
-            // הלוגיקה: חפש ping_sender פעיל לפי phone_id
-            // LID של הלקוח שונה מ-target_number של ה-PING (מספר טלפון)
-            // לכן מחפשים לפי phone_id + status=pending בלבד
-            if (!string.IsNullOrEmpty(contactLid))
-                await _supabaseService.MatchPingSenderByLidAsync(phoneId, contactLid, contact.Id);
+            // ── אין auto-match — המשתמש בוחר בשלב 2 ──────────────
+            // ping_sender.target_number = מספר טלפון (972...)
+            // הודעה נכנסת עם LID (46...) — אין קשר ישיר ידוע
+            // הקישור קורה ב-select_response (שלב 3) על ידי המשתמש
+            _logger.LogInformation("[MSG] Draft contact {Id} waiting for user selection in wizard", contact.Id);
 
             await SaveMessage(phoneId, phone, contact, contactNumber, contactLid, isIncoming, payload);
         }
