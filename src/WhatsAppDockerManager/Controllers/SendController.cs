@@ -182,11 +182,20 @@ public async Task<IActionResult> SendPing(Guid phoneId, [FromBody] SendPingReque
 
     try
     {
-        var client   = _httpClientFactory.CreateClient();
-        client.Timeout = TimeSpan.FromSeconds(30);
+        var targetNumber = request.Jid.Split('@')[0];
 
-        var pingText    = request.Text ?? "🔔";
-        var sendRequest = new { jid = request.Jid, text = pingText };
+        // ── שלב 1: צור ping_sender ב-DB לפני השליחה ─────────────
+        // חיוני: WEBHOOK מגיע לפני שה-response חוזר
+        // ping_sender חייב להיות קיים כדי שה-WEBHOOK ימצא אותו
+        var pingSender = await _supabaseService.CreatePingSenderAsync(
+            phoneId, targetNumber, null, phone.UserId);  // messageId יתעדכן אחרי
+
+        _logger.LogInformation("[PING] Created ping_sender {PsId} before send", pingSender.Id);
+
+        // ── שלב 2: שלח לContainer ────────────────────────────────
+        var client      = _httpClientFactory.CreateClient();
+        client.Timeout  = TimeSpan.FromSeconds(30);
+        var sendRequest = new { jid = request.Jid, text = request.Text ?? "🔔" };
 
         var response        = await client.PostAsJsonAsync($"{phone.DockerUrl}/send/text", sendRequest);
         var responseContent = await response.Content.ReadAsStringAsync();
@@ -195,7 +204,7 @@ public async Task<IActionResult> SendPing(Guid phoneId, [FromBody] SendPingReque
             return StatusCode((int)response.StatusCode,
                 System.Text.Json.JsonSerializer.Deserialize<object>(responseContent));
 
-        // ── חלץ messageId מה-response ────────────────────────────
+        // ── שלב 3: עדכן ping_sender עם messageId ─────────────────
         string? whatsappMessageId = null;
         try
         {
@@ -205,39 +214,28 @@ public async Task<IActionResult> SendPing(Guid phoneId, [FromBody] SendPingReque
         }
         catch { }
 
-        var targetNumber = request.Jid.Split('@')[0];
+        if (!string.IsNullOrEmpty(whatsappMessageId))
+        {
+            pingSender.PingMessageId = whatsappMessageId;
+            await _supabaseService.UpdatePingSenderAsync(pingSender);
+            _logger.LogInformation("[PING] Updated ping_sender {PsId} with messageId={MsgId}",
+                pingSender.Id, whatsappMessageId);
+        }
 
-        // ── צור ping_sender עם user_id מה-phone ─────────────────
-        var pingSender = await _supabaseService.CreatePingSenderAsync(
-            phoneId, targetNumber, whatsappMessageId, phone.UserId);
-
-        // ── מצא את ה-contact שנוצר ע"י ה-WEBHOOK ────────────────
-        // ה-WEBHOOK כבר יצר contact כשקיבל את הודעת ה-PING (fromMe=true)
-        // ממתין רגע קצר כדי לתת ל-WEBHOOK לסיים
-        await Task.Delay(300);
-
+        // ── שלב 4: נסה לקשר contact (WEBHOOK אולי כבר עיבד) ─────
         var contact = await _supabaseService.GetContactByNumberAsync(phoneId, targetNumber);
-
         if (contact != null && pingSender.ContactId == null)
         {
-            // ── קשר ping_sender → contact ────────────────────────
             pingSender.ContactId = contact.Id;
             await _supabaseService.UpdatePingSenderAsync(pingSender);
-
-            _logger.LogInformation(
-                "[PING] Linked ping_sender {PsId} → contact {ContactId} (number={Number})",
-                pingSender.Id, contact.Id, targetNumber);
+            _logger.LogInformation("[PING] Linked ping_sender {PsId} → contact {ContactId}",
+                pingSender.Id, contact.Id);
         }
         else if (contact == null)
         {
-            // WEBHOOK טרם עיבד — לא נורא, Python יקשר אחר כך
-            _logger.LogWarning(
-                "[PING] Contact not found yet for {Number} — Python will link via contact_id",
-                targetNumber);
+            // Python יקשר contact_id לאחר יצירת ה-contact
+            _logger.LogWarning("[PING] Contact not found yet — Python will link contact_id");
         }
-
-        _logger.LogInformation("[PING] Sent to {Jid}, pingSenderId={PsId}, messageId={MsgId}",
-            request.Jid, pingSender.Id, whatsappMessageId);
 
         return Ok(new
         {

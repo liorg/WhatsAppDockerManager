@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "dgSpecHash": "oy/klXTqoTZEsRVkat5EJz+PaW50zGiKkhGlVD1hJ0Nf/+imq8X5McAG0bmmXPYhhu9SZJC373JaqFidbfy6jw==",
+  "dgSpecHash": "utbPaVBKJYOOdHeZoEA5vPBfStiogrdGby2AmyDeISCuwfQmhUu86AsaT3kI7DCRh0Pue86Jyf3kJSRyjUUA4A==",
   "success": true,
   "projectFilePath": "/home/lior/projects/github/WhatsAppDockerManager/src/WhatsAppDockerManager/WhatsAppDockerManager.csproj",
   "expectedPackageFiles": [
