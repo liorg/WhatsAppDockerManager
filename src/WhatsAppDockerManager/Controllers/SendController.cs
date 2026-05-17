@@ -161,6 +161,11 @@ public class SendController : ControllerBase
 /// <summary>
 /// Send PING message to identify contact LID
 /// </summary>
+// ════════════════════════════════════════════════════════════════════
+// SendController.cs — SendPing תיקון
+// אחרי יצירת ping_sender — מעדכן contact_id מיד
+// ════════════════════════════════════════════════════════════════════
+
 [HttpPost("ping")]
 public async Task<IActionResult> SendPing(Guid phoneId, [FromBody] SendPingRequest request)
 {
@@ -173,39 +178,70 @@ public async Task<IActionResult> SendPing(Guid phoneId, [FromBody] SendPingReque
 
     try
     {
-        var client = _httpClientFactory.CreateClient();
+        var client   = _httpClientFactory.CreateClient();
         client.Timeout = TimeSpan.FromSeconds(30);
 
-        var pingText = request.Text ?? "🔔";
+        var pingText    = request.Text ?? "🔔";
         var sendRequest = new { jid = request.Jid, text = pingText };
-        
-        var response = await client.PostAsJsonAsync($"{phone.DockerUrl}/send/text", sendRequest);
+
+        var response        = await client.PostAsJsonAsync($"{phone.DockerUrl}/send/text", sendRequest);
         var responseContent = await response.Content.ReadAsStringAsync();
 
-        if (response.IsSuccessStatusCode)
+        if (!response.IsSuccessStatusCode)
+            return StatusCode((int)response.StatusCode,
+                System.Text.Json.JsonSerializer.Deserialize<object>(responseContent));
+
+        // ── חלץ messageId מה-response ────────────────────────────
+        string? whatsappMessageId = null;
+        try
         {
-            string? whatsappMessageId = null;
-            try
-            {
-                var jsonResponse = JsonSerializer.Deserialize<JsonElement>(responseContent);
-                if (jsonResponse.TryGetProperty("messageId", out var msgIdElement))
-                    whatsappMessageId = msgIdElement.GetString();
-            }
-            catch { }
+            var json = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(responseContent);
+            if (json.TryGetProperty("messageId", out var msgId))
+                whatsappMessageId = msgId.GetString();
+        }
+        catch { }
 
-            var targetNumber = request.Jid.Split('@')[0];
-            var pingSender = await _supabaseService.CreatePingSenderAsync(phoneId, targetNumber, whatsappMessageId);
+        var targetNumber = request.Jid.Split('@')[0];
 
-            _logger.LogInformation("Sent PING to {Jid}, PingSender: {PingSenderId}", request.Jid, pingSender.Id);
+        // ── צור ping_sender ───────────────────────────────────────
+        var pingSender = await _supabaseService.CreatePingSenderAsync(
+            phoneId, targetNumber, whatsappMessageId);
 
-            return Ok(new { 
-                success = true, 
-                pingSenderId = pingSender.Id,
-                messageId = whatsappMessageId 
-            });
+        // ── מצא את ה-contact שנוצר ע"י ה-WEBHOOK ────────────────
+        // ה-WEBHOOK כבר יצר contact כשקיבל את הודעת ה-PING (fromMe=true)
+        // ממתין רגע קצר כדי לתת ל-WEBHOOK לסיים
+        await Task.Delay(300);
+
+        var contact = await _supabaseService.GetContactByNumberAsync(phoneId, targetNumber);
+
+        if (contact != null && pingSender.ContactId == null)
+        {
+            // ── קשר ping_sender → contact ────────────────────────
+            pingSender.ContactId = contact.Id;
+            await _supabaseService.UpdatePingSenderAsync(pingSender);
+
+            _logger.LogInformation(
+                "[PING] Linked ping_sender {PsId} → contact {ContactId} (number={Number})",
+                pingSender.Id, contact.Id, targetNumber);
+        }
+        else if (contact == null)
+        {
+            // WEBHOOK טרם עיבד — לא נורא, Python יקשר אחר כך
+            _logger.LogWarning(
+                "[PING] Contact not found yet for {Number} — Python will link via contact_id",
+                targetNumber);
         }
 
-        return StatusCode((int)response.StatusCode, JsonSerializer.Deserialize<object>(responseContent));
+        _logger.LogInformation("[PING] Sent to {Jid}, pingSenderId={PsId}, messageId={MsgId}",
+            request.Jid, pingSender.Id, whatsappMessageId);
+
+        return Ok(new
+        {
+            success      = true,
+            pingSenderId = pingSender.Id,
+            messageId    = whatsappMessageId,
+            contactId    = contact?.Id,
+        });
     }
     catch (Exception ex)
     {
@@ -213,6 +249,7 @@ public async Task<IActionResult> SendPing(Guid phoneId, [FromBody] SendPingReque
         return StatusCode(503, new { error = "Container unavailable", details = ex.Message });
     }
 }
+
     private async Task<IActionResult> ForwardToContainer(Guid phoneId, string endpoint, object request, string jid, object messageContent)
     {
         var phone = await _supabaseService.GetPhoneByIdAsync(phoneId);

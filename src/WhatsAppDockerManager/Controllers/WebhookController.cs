@@ -183,33 +183,10 @@ public class WebhookController : ControllerBase
                     outContact = await _supabaseService.CreateDraftContactAsync(phoneId, contactNumber, contactLid, contactName);
                 }
 
-                // ── קשר contact ← ping_sender ─────────────────────
-                // ping_sender נוצר ע"י SendController — ייתכן race condition
-                // עם ה-webhook. נסה כמה פעמים עם delay קצר.
-                PingSender? ps = null;
-                for (int attempt = 0; attempt < 5 && ps == null; attempt++)
-                {
-                    if (attempt > 0)
-                        await Task.Delay(500); // המתן ל-ping_sender להיכתב ל-DB
-
-                    if (!string.IsNullOrEmpty(payload.MessageId))
-                        ps = await _supabaseService.GetPingSenderByMessageIdAsync(phoneId, payload.MessageId);
-
-                    ps ??= await _supabaseService.GetPendingPingSenderAsync(phoneId, contactNumber);
-                }
-
-                if (ps != null && ps.ContactId == null)
-                {
-                    ps.ContactId = outContact.Id;
-                    await _supabaseService.UpdatePingSenderAsync(ps);
-                    _logger.LogInformation("[PING-OUT] Linked ping_sender {PsId} → contact {ContactId}",
-                        ps.Id, outContact.Id);
-                }
-                else if (ps == null)
-                {
-                    _logger.LogWarning("[PING-OUT] ping_sender not found for messageId={MsgId} number={Number} — will retry on next message",
-                        payload.MessageId, contactNumber);
-                }
+                // ── הקישור ping_sender → contact נעשה ב-SendController ──
+                // לאחר שה-ping_sender נוצר, SendController מעדכן contact_id
+                // הודעה יוצאת זו נשמרת בלבד
+                _logger.LogInformation("[PING-OUT] Saved outgoing PING for contact {ContactId}", outContact.Id);
 
                 await SaveMessage(phoneId, phone, outContact, contactNumber, contactLid, isIncoming: false, payload);
                 return;

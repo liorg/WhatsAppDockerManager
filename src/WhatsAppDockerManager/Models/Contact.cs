@@ -10,8 +10,8 @@ public class Contact : BaseModel
     public Guid Id { get; set; }
     
   
-    [Column("ping_sender_id")]
-    public Guid? PingSenderId { get; set; }
+    //[Column("ping_sender_id")]
+    //public Guid? PingSenderId { get; set; }
     
     [Column("whatsapp_name")]
     public string? WhatsappName { get; set; }

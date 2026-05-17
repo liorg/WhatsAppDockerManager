@@ -73,7 +73,10 @@ public interface ISupabaseService
     Task<(Phone phone, bool created)> GetOrCreatePhoneAsync(string phoneNumber, Guid userId, string? nickname = null);
 
     Task<PingSender?> GetPingSenderByMessageIdAsync(Guid phoneId, string pingMessageId);
+    
     Task UpdatePingSenderAsync(PingSender pingSender);
+
+  
 
 }
 
@@ -280,10 +283,12 @@ public class SupabaseService : ISupabaseService
 
 
 
+ 
+ 
 // ════════════════════════════════════════════════════════════════════
 // הוסף ל-SupabaseService class:
 // ════════════════════════════════════════════════════════════════════
-
+ 
 // חפש ping_sender לפי ping_message_id (whatsapp message id של ה-PING)
 public async Task<PingSender?> GetPingSenderByMessageIdAsync(Guid phoneId, string pingMessageId)
 {
@@ -302,7 +307,7 @@ public async Task<PingSender?> GetPingSenderByMessageIdAsync(Guid phoneId, strin
         return null;
     }
 }
-
+ 
 public async Task UpdatePingSenderAsync(PingSender pingSender)
 {
     try
@@ -316,12 +321,20 @@ public async Task UpdatePingSenderAsync(PingSender pingSender)
         throw;
     }
 }
+ 
+
 
 // ════════════════════════════════════════════════════════════════════
 // MatchPingSenderByLidAsync — תיקון: חיפוש לפי phoneId בלבד
 // כי draft.Number = LID ≠ ping_sender.target_number
 // ════════════════════════════════════════════════════════════════════
 
+
+// ════════════════════════════════════════════════════════════════════
+// MatchPingSenderByLidAsync — תיקון: חיפוש לפי phoneId בלבד
+// כי draft.Number = LID ≠ ping_sender.target_number
+// ════════════════════════════════════════════════════════════════════
+ 
 public async Task<PingSender?> MatchPingSenderByLidAsync(Guid phoneId, string lid, Guid contactId)
 {
     try
@@ -334,22 +347,28 @@ public async Task<PingSender?> MatchPingSenderByLidAsync(Guid phoneId, string li
             _logger.LogInformation("[MATCH] No pending ping_sender for phone {PhoneId}", phoneId);
             return null;
         }
-
-        // עדכן ping_sender עם LID + draft contact
+ 
+        // שמור את ה-new contact_id (שהגיע מ-Python) לפני עדכון
+        var newContactId = ps.ContactId; // ← זה ה-new contact, לא ה-draft!
+ 
+        // עדכן ping_sender: LID + matched — אבל שמור contact_id של ה-new
         ps.Lid       = lid;
-        ps.ContactId = contactId;
+        // contact_id נשאר כפי שהוא — מצביע על ה-new contact שיצר את ה-PING
         ps.Status    = "matched";
         ps.MatchedAt = DateTime.UtcNow;
         await _client.From<PingSender>().Update(ps);
-
+ 
         // עדכן draft contact עם ping_sender_id
         var draftContact = await GetContactByIdAsync(contactId);
-        if (draftContact != null && draftContact.PingSenderId == null)
+        if (draftContact != null )
         {
-            draftContact.PingSenderId = ps.Id;
+            // PingSenderId removed
             await _client.From<Contact>().Update(draftContact);
         }
-
+ 
+        // החזר את ה-ps עם ContactId המקורי (new contact) — הWebhook ישתמש בזה
+        // לעדכן parent_contact_id על ה-draft
+ 
         _logger.LogInformation("[MATCH] draft={ContactId} (LID={Lid}) ↔ ping_sender={PsId}",
             contactId, lid, ps.Id);
         return ps;
@@ -360,11 +379,14 @@ public async Task<PingSender?> MatchPingSenderByLidAsync(Guid phoneId, string li
         return null;
     }
 }
+ 
+
+ 
 
 // ════════════════════════════════════════════════════════════════════
 // GetLatestPendingPingSenderAsync — רק status=pending
 // ════════════════════════════════════════════════════════════════════
-
+ 
 public async Task<PingSender?> GetLatestPendingPingSenderAsync(Guid phoneId)
 {
     try
@@ -851,6 +873,8 @@ public async Task UpdatePhoneUserIdAsync(Guid phoneId, Guid userId)
 // מטפל ב-duplicate key על (lid, phone_id)
 // ════════════════════════════════════════════════════════════════════
 
+
+
 public async Task<Contact> CreateDraftContactAsync(
     Guid phoneId,
     string contactNumber,
@@ -926,7 +950,8 @@ public async Task<Contact> CreateDraftContactAsync(
             WhatsappName = name,
             Tag          = "draft",
             IsConnect    = false,
-        });
+            CreatedAt    = DateTime.UtcNow,  // ← תמיד מאוכלס
+            });
     }
     catch (Exception ex) when (ex.Message.Contains("23505") ||
                                ex.Message.Contains("duplicate key") ||
@@ -950,7 +975,7 @@ public async Task<Contact> CreateDraftContactAsync(
         throw;
     }
 }
- 
+
 
     #endregion
 
