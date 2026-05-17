@@ -165,6 +165,10 @@ public class SendController : ControllerBase
 // SendController.cs — SendPing תיקון
 // אחרי יצירת ping_sender — מעדכן contact_id מיד
 // ════════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════════
+// SendController.cs — SendPing תיקון
+// אחרי יצירת ping_sender — מעדכן contact_id מיד
+// ════════════════════════════════════════════════════════════════════
 
 [HttpPost("ping")]
 public async Task<IActionResult> SendPing(Guid phoneId, [FromBody] SendPingRequest request)
@@ -203,9 +207,9 @@ public async Task<IActionResult> SendPing(Guid phoneId, [FromBody] SendPingReque
 
         var targetNumber = request.Jid.Split('@')[0];
 
-        // ── צור ping_sender ───────────────────────────────────────
+        // ── צור ping_sender עם user_id מה-phone ─────────────────
         var pingSender = await _supabaseService.CreatePingSenderAsync(
-            phoneId, targetNumber, whatsappMessageId);
+            phoneId, targetNumber, whatsappMessageId, phone.UserId);
 
         // ── מצא את ה-contact שנוצר ע"י ה-WEBHOOK ────────────────
         // ה-WEBHOOK כבר יצר contact כשקיבל את הודעת ה-PING (fromMe=true)
