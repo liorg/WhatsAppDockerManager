@@ -184,12 +184,19 @@ public class WebhookController : ControllerBase
                 }
 
                 // ── קשר contact ← ping_sender ─────────────────────
-                // מצא את ה-ping_sender לפי ping_message_id או target_number
-                var ps = !string.IsNullOrEmpty(payload.MessageId)
-                    ? await _supabaseService.GetPingSenderByMessageIdAsync(phoneId, payload.MessageId)
-                    : null;
+                // ping_sender נוצר ע"י SendController — ייתכן race condition
+                // עם ה-webhook. נסה כמה פעמים עם delay קצר.
+                PingSender? ps = null;
+                for (int attempt = 0; attempt < 5 && ps == null; attempt++)
+                {
+                    if (attempt > 0)
+                        await Task.Delay(500); // המתן ל-ping_sender להיכתב ל-DB
 
-                ps ??= await _supabaseService.GetPendingPingSenderAsync(phoneId, contactNumber);
+                    if (!string.IsNullOrEmpty(payload.MessageId))
+                        ps = await _supabaseService.GetPingSenderByMessageIdAsync(phoneId, payload.MessageId);
+
+                    ps ??= await _supabaseService.GetPendingPingSenderAsync(phoneId, contactNumber);
+                }
 
                 if (ps != null && ps.ContactId == null)
                 {
@@ -197,6 +204,11 @@ public class WebhookController : ControllerBase
                     await _supabaseService.UpdatePingSenderAsync(ps);
                     _logger.LogInformation("[PING-OUT] Linked ping_sender {PsId} → contact {ContactId}",
                         ps.Id, outContact.Id);
+                }
+                else if (ps == null)
+                {
+                    _logger.LogWarning("[PING-OUT] ping_sender not found for messageId={MsgId} number={Number} — will retry on next message",
+                        payload.MessageId, contactNumber);
                 }
 
                 await SaveMessage(phoneId, phone, outContact, contactNumber, contactLid, isIncoming: false, payload);
