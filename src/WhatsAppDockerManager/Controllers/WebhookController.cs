@@ -82,193 +82,218 @@ public class WebhookController : ControllerBase
             _logger.LogInformation("Saved creds_base64 for phone {PhoneId}", phoneId);
         }
     }
-private async Task HandleIncomingMessage(Guid phoneId, Phone phone, ContainerEventPayload payload)
-{
-    if (string.IsNullOrEmpty(payload.Jid))
+
+    private async Task HandleIncomingMessage(Guid phoneId, Phone phone, ContainerEventPayload payload)
     {
-        _logger.LogWarning("Message without JID for phone {PhoneId}", phoneId);
-        return;
-    }
-
-    try
-    {
-        _logger.LogInformation("[MSG-RAW] Jid={Jid} Type={Type} Data={Data}",
-            payload.Jid, payload.Type,
-            System.Text.Json.JsonSerializer.Serialize(payload.Data));
-
-        // ── Parse JID ─────────────────────────────────────────
-        var jidParts  = payload.Jid.Split('@');
-        var jidLocal  = jidParts[0];
-        var jidDomain = jidParts.Length > 1 ? jidParts[1] : "";
-        bool isLidJid = jidDomain == "lid";
-
-        // ── סנן broadcast/status/groups ───────────────────────
-        if (_ignoredJidDomains.Contains(jidDomain) || _ignoredJidLocals.Contains(jidLocal))
+        if (string.IsNullOrEmpty(payload.Jid))
         {
-            _logger.LogInformation("[MSG] Ignored JID={Jid}", payload.Jid);
+            _logger.LogWarning("Message without JID for phone {PhoneId}", phoneId);
             return;
         }
 
-        // ── מניעת כפילויות ────────────────────────────────────
-        if (!string.IsNullOrEmpty(payload.MessageId))
+        try
         {
-            var exists = await _supabaseService.MessageExistsAsync(payload.MessageId);
-            if (exists)
+            _logger.LogInformation("[MSG-RAW] Jid={Jid} Type={Type} Data={Data}",
+                payload.Jid, payload.Type,
+                System.Text.Json.JsonSerializer.Serialize(payload.Data));
+
+            // ── Parse JID ─────────────────────────────────────────
+            var jidParts  = payload.Jid.Split('@');
+            var jidLocal  = jidParts[0];
+            var jidDomain = jidParts.Length > 1 ? jidParts[1] : "";
+            bool isLidJid = jidDomain == "lid";
+
+            // ── סנן broadcast/status/groups ───────────────────────
+            if (_ignoredJidDomains.Contains(jidDomain) || _ignoredJidLocals.Contains(jidLocal))
             {
-                _logger.LogInformation("[MSG] Duplicate whatsapp_message_id={MsgId} — skipping", payload.MessageId);
+                _logger.LogInformation("[MSG] Ignored JID={Jid}", payload.Jid);
                 return;
             }
-        }
 
-        // ── Extract payload data ───────────────────────────────
-        string? contactName = null;
-        string? rawLid      = null;
-
-        if (payload.Data != null)
-        {
-            if (payload.Data.TryGetValue("pushName", out var pushName))
-                contactName = pushName?.ToString();
-
-            if (payload.Data.TryGetValue("lid", out var lidVal))
+            // ── מניעת כפילויות ────────────────────────────────────
+            if (!string.IsNullOrEmpty(payload.MessageId))
             {
-                var rawLidRaw = lidVal?.ToString();
-                var lidLocal  = rawLidRaw?.Split('@')[0];
-                rawLid = IsValidLid(lidLocal) ? rawLidRaw : null;
+                var exists = await _supabaseService.MessageExistsAsync(payload.MessageId);
+                if (exists)
+                {
+                    _logger.LogInformation("[MSG] Duplicate whatsapp_message_id={MsgId} — skipping", payload.MessageId);
+                    return;
+                }
             }
-        }
 
-        // ── fromMe ────────────────────────────────────────────
-        bool isIncoming = true;
-        if (payload.Data?.TryGetValue("fromMe", out var fromMe) == true)
-        {
-            if (fromMe is System.Text.Json.JsonElement je)
-                isIncoming = !je.GetBoolean();
+            // ── Extract payload data ───────────────────────────────
+            string? contactName = null;
+            string? rawLid      = null;
+
+            if (payload.Data != null)
+            {
+                if (payload.Data.TryGetValue("pushName", out var pushName))
+                    contactName = pushName?.ToString();
+
+                if (payload.Data.TryGetValue("lid", out var lidVal))
+                {
+                    var rawLidRaw = lidVal?.ToString();
+                    var lidLocal  = rawLidRaw?.Split('@')[0];
+                    rawLid = IsValidLid(lidLocal) ? rawLidRaw : null;
+                }
+            }
+
+            // ── fromMe ────────────────────────────────────────────
+            bool isIncoming = true;
+            if (payload.Data?.TryGetValue("fromMe", out var fromMe) == true)
+            {
+                if (fromMe is System.Text.Json.JsonElement je)
+                    isIncoming = !je.GetBoolean();
+                else
+                    isIncoming = !Convert.ToBoolean(fromMe);
+            }
+
+            // ── user_id מה-phone ─────────────────────────────────
+            var userId = phone.UserId;
+
+            // ── Resolve contactNumber + contactLid ────────────────
+            string  contactNumber;
+            string? contactLid;
+
+            if (isLidJid)
+            {
+                contactLid    = jidLocal;
+                contactNumber = jidLocal;
+
+                var byLid = await _supabaseService.GetContactByLidAsync(phoneId, jidLocal);
+                if (byLid != null)
+                    contactNumber = byLid.Number;
+            }
             else
-                isIncoming = !Convert.ToBoolean(fromMe);
-        }
-
-        // ── user_id מה-phone — לאכלס על contacts ו-ping_sender ─
-        var userId = phone.UserId;
-
-        // ── Resolve contactNumber + contactLid ────────────────
-        string  contactNumber;
-        string? contactLid;
-
-        if (isLidJid)
-        {
-            contactLid    = jidLocal;
-            contactNumber = jidLocal; // זמני — יוחלף אם נמצא contact קיים
-
-            var byLid = await _supabaseService.GetContactByLidAsync(phoneId, jidLocal);
-            if (byLid != null)
-                contactNumber = byLid.Number;
-        }
-        else
-        {
-            contactNumber = jidLocal;
-            var rawLidLocal = string.IsNullOrEmpty(rawLid) ? null : rawLid.Split('@')[0];
-            contactLid = IsValidLid(rawLidLocal) ? rawLidLocal : null;
-        }
-
-        // ══════════════════════════════════════════════════════
-        // הודעה יוצאת (fromMe=true) — זוהי הודעת ה-PING שלנו
-        // ══════════════════════════════════════════════════════
-        if (!isIncoming)
-        {
-            var outContact = await _supabaseService.GetContactByNumberAsync(phoneId, contactNumber)
-                          ?? await _supabaseService.GetContactByLidAsync(phoneId, contactNumber);
-
-            if (outContact == null)
             {
-                _logger.LogInformation("[PING-OUT] No contact for {Number} — creating draft", contactNumber);
-                outContact = await _supabaseService.CreateDraftContactAsync(
-                    phoneId, contactNumber, contactLid, contactName, userId);  // ← userId
+                contactNumber = jidLocal;
+                var rawLidLocal = string.IsNullOrEmpty(rawLid) ? null : rawLid.Split('@')[0];
+                contactLid = IsValidLid(rawLidLocal) ? rawLidLocal : null;
             }
 
-            _logger.LogInformation("[PING-OUT] Saved outgoing PING for contact {ContactId}", outContact.Id);
-            await SaveMessage(phoneId, phone, outContact, contactNumber, contactLid, isIncoming: false, payload);
-            return;
-        }
-
-        // ══════════════════════════════════════════════════════
-        // הודעה נכנסת — מהלקוח (תגובה על ה-PING)
-        // ══════════════════════════════════════════════════════
-        Contact? existing = null;
-        if (!string.IsNullOrEmpty(contactLid))
-            existing = await _supabaseService.GetContactByLidAsync(phoneId, contactLid);
-        if (existing == null)
-            existing = await _supabaseService.GetContactByNumberAsync(phoneId, contactNumber);
-
-        Contact contact;
-        if (existing != null)
-        {
-            contact = existing;
-            bool needsUpdate = false;
-
-            if (!string.IsNullOrEmpty(contactName))
+            // ══════════════════════════════════════════════════════
+            // הודעה יוצאת (fromMe=true)
+            // ══════════════════════════════════════════════════════
+            if (!isIncoming)
             {
-                if (string.IsNullOrEmpty(contact.WhatsappName) || contact.WhatsappName != contactName)
-                { contact.WhatsappName = contactName; needsUpdate = true; }
-                if (string.IsNullOrEmpty(contact.Name) || contact.Name == contact.Number || contact.Name == contact.Lid)
-                { contact.Name = contactName; needsUpdate = true; }
+                var outContact = await _supabaseService.GetContactByNumberAsync(phoneId, contactNumber)
+                              ?? await _supabaseService.GetContactByLidAsync(phoneId, contactNumber);
+
+                if (outContact == null)
+                {
+                    _logger.LogInformation("[PING-OUT] No contact for {Number} — creating draft", contactNumber);
+                    outContact = await _supabaseService.CreateDraftContactAsync(
+                        phoneId, contactNumber, contactLid, contactName, userId);
+                }
+
+                _logger.LogInformation("[PING-OUT] Saved outgoing PING for contact {ContactId}", outContact.Id);
+                await SaveMessage(phoneId, phone, outContact, contactNumber, contactLid, isIncoming: false, payload);
+                return;
             }
 
-            // עדכן LID רק אם ריק או מזויף
-            if (IsValidLid(contactLid) && !IsValidLid(contact.Lid))
-            { contact.Lid = contactLid; needsUpdate = true; }
+            // ══════════════════════════════════════════════════════
+            // הודעה נכנסת
+            // ══════════════════════════════════════════════════════
+            Contact? existing = null;
+            if (!string.IsNullOrEmpty(contactLid))
+                existing = await _supabaseService.GetContactByLidAsync(phoneId, contactLid);
+            if (existing == null)
+                existing = await _supabaseService.GetContactByNumberAsync(phoneId, contactNumber);
 
-            // אכלס user_id אם חסר
-            if (userId.HasValue && contact.UserId == null)
-            { contact.UserId = userId; needsUpdate = true; }
+            Contact contact;
+            if (existing != null)
+            {
+                contact = existing;
+                bool needsUpdate = false;
 
-            if (needsUpdate)
-                await _supabaseService.UpdateContactAsync(contact);
+                if (!string.IsNullOrEmpty(contactName))
+                {
+                    if (string.IsNullOrEmpty(contact.WhatsappName) || contact.WhatsappName != contactName)
+                    { contact.WhatsappName = contactName; needsUpdate = true; }
+                    if (string.IsNullOrEmpty(contact.Name) || contact.Name == contact.Number || contact.Name == contact.Lid)
+                    { contact.Name = contactName; needsUpdate = true; }
+                }
 
-            _logger.LogInformation("[MSG] Found existing contact {Id}", contact.Id);
+                if (IsValidLid(contactLid) && !IsValidLid(contact.Lid))
+                { contact.Lid = contactLid; needsUpdate = true; }
+
+                if (userId.HasValue && contact.UserId == null)
+                { contact.UserId = userId; needsUpdate = true; }
+
+                if (needsUpdate)
+                    await _supabaseService.UpdateContactAsync(contact);
+
+                _logger.LogInformation("[MSG] Found existing contact {Id}", contact.Id);
+            }
+            else
+            {
+                contact = await _supabaseService.CreateDraftContactAsync(
+                    phoneId, contactNumber, contactLid, contactName, userId);
+                _logger.LogInformation("[MSG] Created draft contact {Id} lid={Lid}", contact.Id, contactLid);
+            }
+
+            _logger.LogInformation("[MSG] Draft contact {Id} waiting for user selection in wizard", contact.Id);
+            await SaveMessage(phoneId, phone, contact, contactNumber, contactLid, isIncoming, payload);
         }
-        else
+        catch (Exception ex)
         {
-            contact = await _supabaseService.CreateDraftContactAsync(
-                phoneId, contactNumber, contactLid, contactName, userId);  // ← userId
-            _logger.LogInformation("[MSG] Created draft contact {Id} lid={Lid}", contact.Id, contactLid);
+            _logger.LogError(ex, "Error handling message for phone {PhoneId}", phoneId);
         }
-
-        // המשתמש בוחר בשלב 2 — אין auto-match
-        _logger.LogInformation("[MSG] Draft contact {Id} waiting for user selection in wizard", contact.Id);
-
-        await SaveMessage(phoneId, phone, contact, contactNumber, contactLid, isIncoming, payload);
     }
-    catch (Exception ex)
-    {
-        _logger.LogError(ex, "Error handling message for phone {PhoneId}", phoneId);
-    }
-}
-      private async Task SaveMessage(Guid phoneId, Phone phone, Contact contact,
-        string contactNumber, string? contactLid, bool isIncoming, ContainerEventPayload payload)
+
+    private async Task SaveMessage(
+        Guid phoneId, Phone phone, Contact contact,
+        string contactNumber, string? contactLid,
+        bool isIncoming, ContainerEventPayload payload)
     {
         var messageContent = new Dictionary<string, object?>();
+
         if (payload.Data != null)
         {
-            if (payload.Data.TryGetValue("text",       out var text))       messageContent["text"]       = text;
-            if (payload.Data.TryGetValue("type",       out var type))       messageContent["type"]       = type;
-            if (payload.Data.TryGetValue("buttonId",   out var buttonId))   messageContent["buttonId"]   = buttonId;
-            if (payload.Data.TryGetValue("selectedId", out var selectedId)) messageContent["selectedId"] = selectedId;
-            if (payload.Data.TryGetValue("caption",    out var caption))    messageContent["caption"]    = caption;
+            // ── שדות בסיסיים ──────────────────────────────────────
+            TryAdd(payload.Data, messageContent, "text");
+            TryAdd(payload.Data, messageContent, "caption");
+            TryAdd(payload.Data, messageContent, "buttonId");
+            TryAdd(payload.Data, messageContent, "selectedId");
+            TryAdd(payload.Data, messageContent, "displayText");
+
+            // ── list_message ──────────────────────────────────────
+            TryAdd(payload.Data, messageContent, "title");
+            TryAdd(payload.Data, messageContent, "description");
+            TryAdd(payload.Data, messageContent, "buttonText");
+            TryAdd(payload.Data, messageContent, "footer");
+            TryAdd(payload.Data, messageContent, "sections");
+
+            // ── buttons ───────────────────────────────────────────
+            TryAdd(payload.Data, messageContent, "buttons");
         }
-        if (!messageContent.ContainsKey("type") && !string.IsNullOrEmpty(payload.Type))
+
+        // type תמיד נשמר
+        if (!string.IsNullOrEmpty(payload.Type))
             messageContent["type"] = payload.Type;
+
+        _logger.LogInformation("[MSG-SAVE] type={Type} keys={Keys}",
+            payload.Type,
+            string.Join(",", messageContent.Keys));
 
         var messageSender = isIncoming
             ? (contactLid ?? contactNumber)
             : phone.Number ?? contactNumber;
 
-        var message = await _supabaseService.AddMessageAsync(
+        await _supabaseService.AddMessageAsync(
             phoneId, contact.Id, messageSender, messageContent,
             direction: isIncoming, leafId: null,
             whatsappMessageId: payload.MessageId);
+    }
 
-        _logger.LogInformation("[MSG] Saved {Dir} message {MsgId} phone={PhoneId}",
-            isIncoming ? "incoming" : "outgoing", message.Id, phoneId);
+    // ── Helper ────────────────────────────────────────────────────────────────
+    private static void TryAdd(
+        Dictionary<string, object> source,
+        Dictionary<string, object?> target,
+        string key)
+    {
+        if (source.TryGetValue(key, out var value))
+            target[key] = value;
     }
 }
 
