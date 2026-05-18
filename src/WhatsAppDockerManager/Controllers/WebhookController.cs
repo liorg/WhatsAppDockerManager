@@ -38,7 +38,8 @@ public class WebhookController : ControllerBase
     [HttpPost("container-event/{phoneId}")]
     public async Task<IActionResult> ContainerEvent(Guid phoneId, [FromBody] ContainerEventPayload payload)
     {
-        _logger.LogInformation("Container event for phone {PhoneId}: {Event}", phoneId, payload.Event ?? "unknown");
+         _logger.LogWarning("[RAW-PAYLOAD] {Json}",  System.Text.Json.JsonSerializer.Serialize(payload));
+        _logger.LogInformation("RAW-PAYLOAD]  Container event for phone {PhoneId}: {Event}", phoneId, payload.Event ?? "unknown");
 
         var phone = await _supabaseService.GetPhoneByIdAsync(phoneId);
         if (phone == null)
@@ -50,18 +51,18 @@ public class WebhookController : ControllerBase
                 await HandleAuthenticated(phoneId, phone, payload);
                 break;
             case "disconnected":
-                _logger.LogWarning("Phone {PhoneId} disconnected", phoneId);
+                _logger.LogWarning("RAW-PAYLOAD] Phone {PhoneId} disconnected", phoneId);
                 await _supabaseService.UpdatePhoneDockerStatusAsync(phoneId, PhoneDockerStatus.Error, errorMessage: "WhatsApp disconnected");
                 break;
             case "qr":
-                _logger.LogInformation("Phone {PhoneId} waiting for QR scan", phoneId);
+                _logger.LogInformation("RAW-PAYLOAD] Phone {PhoneId} waiting for QR scan", phoneId);
                 await _supabaseService.UpdatePhoneDockerStatusAsync(phoneId, PhoneDockerStatus.Pending);
                 break;
             case "message":
                 await HandleIncomingMessage(phoneId, phone, payload);
                 break;
             default:
-                _logger.LogWarning("Unknown event type: {Event}", payload.Event);
+                _logger.LogWarning("RAW-PAYLOAD] Unknown event type: {Event}", payload.Event);
                 break;
         }
 
@@ -79,7 +80,7 @@ public class WebhookController : ControllerBase
         if (!string.IsNullOrEmpty(payload.CredsB64))
         {
             await _supabaseService.UpdatePhoneCredsAsync(phoneId, payload.CredsB64);
-            _logger.LogInformation("Saved creds_base64 for phone {PhoneId}", phoneId);
+            _logger.LogInformation("RAW-PAYLOAD] Saved creds_base64 for phone {PhoneId}", phoneId);
         }
     }
 
