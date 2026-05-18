@@ -242,51 +242,91 @@ public class WebhookController : ControllerBase
         }
     }
 
-    private async Task SaveMessage(
-        Guid phoneId, Phone phone, Contact contact,
-        string contactNumber, string? contactLid,
-        bool isIncoming, ContainerEventPayload payload)
+   // החלף את כל פונקציית SaveMessage ב-WebhookController.cs
+
+private async Task SaveMessage(
+    Guid phoneId, Phone phone, Contact contact,
+    string contactNumber, string? contactLid,
+    bool isIncoming, ContainerEventPayload payload)
+{
+    var messageContent = new Dictionary<string, object?>();
+
+    if (payload.Data != null)
     {
-        var messageContent = new Dictionary<string, object?>();
-
-        if (payload.Data != null)
-        {
-            // ── שדות בסיסיים ──────────────────────────────────────
-            TryAdd(payload.Data, messageContent, "text");
-            TryAdd(payload.Data, messageContent, "caption");
-            TryAdd(payload.Data, messageContent, "buttonId");
-            TryAdd(payload.Data, messageContent, "selectedId");
-            TryAdd(payload.Data, messageContent, "displayText");
-
-            // ── list_message ──────────────────────────────────────
-            TryAdd(payload.Data, messageContent, "title");
-            TryAdd(payload.Data, messageContent, "description");
-            TryAdd(payload.Data, messageContent, "buttonText");
-            TryAdd(payload.Data, messageContent, "footer");
-            TryAdd(payload.Data, messageContent, "sections");
-
-            // ── buttons ───────────────────────────────────────────
-            TryAdd(payload.Data, messageContent, "buttons");
-        }
-
-        // type תמיד נשמר
-        if (!string.IsNullOrEmpty(payload.Type))
-            messageContent["type"] = payload.Type;
-
-        _logger.LogInformation("[MSG-SAVE] type={Type} keys={Keys}",
-            payload.Type,
-            string.Join(",", messageContent.Keys));
-
-        var messageSender = isIncoming
-            ? (contactLid ?? contactNumber)
-            : phone.Number ?? contactNumber;
-
-        await _supabaseService.AddMessageAsync(
-            phoneId, contact.Id, messageSender, messageContent,
-            direction: isIncoming, leafId: null,
-            whatsappMessageId: payload.MessageId);
+        TryAdd(payload.Data, messageContent, "text");
+        TryAdd(payload.Data, messageContent, "caption");
+        TryAdd(payload.Data, messageContent, "buttonId");
+        TryAdd(payload.Data, messageContent, "selectedId");
+        TryAdd(payload.Data, messageContent, "displayText");
+        TryAdd(payload.Data, messageContent, "title");
+        TryAdd(payload.Data, messageContent, "description");
+        TryAdd(payload.Data, messageContent, "buttonText");
+        TryAdd(payload.Data, messageContent, "footer");
+        TryAdd(payload.Data, messageContent, "sections");
+        TryAdd(payload.Data, messageContent, "buttons");
+        TryAdd(payload.Data, messageContent, "imageUrl");
+        TryAdd(payload.Data, messageContent, "url");
+        TryAdd(payload.Data, messageContent, "audioUrl");
+        TryAdd(payload.Data, messageContent, "fileName");
     }
 
+    // ── זיהוי type חכם ─────────────────────────────────────────────────────
+    var detectedType = DetectMessageType(payload.Type, payload.Data);
+    messageContent["type"] = detectedType;
+
+    _logger.LogInformation("[MSG-SAVE] type={Type} detected={Detected} keys={Keys}",
+        payload.Type, detectedType,
+        string.Join(",", messageContent.Keys));
+
+    var messageSender = isIncoming
+        ? (contactLid ?? contactNumber)
+        : phone.Number ?? contactNumber;
+
+    await _supabaseService.AddMessageAsync(
+        phoneId, contact.Id, messageSender, messageContent,
+        direction: isIncoming, leafId: null,
+        whatsappMessageId: payload.MessageId);
+}
+
+// ── זיהוי type לפי תוכן ─────────────────────────────────────────────────────
+private static string DetectMessageType(string? rawType, Dictionary<string, object>? data)
+{
+    // אם כבר יש type תקין — השתמש בו
+    if (!string.IsNullOrEmpty(rawType) && rawType != "unknown")
+        return rawType;
+
+    if (data == null) return "text";
+
+    // list_message
+    if (data.ContainsKey("sections") || data.ContainsKey("buttonText"))
+        return "list_message";
+
+    // buttons
+    if (data.ContainsKey("buttons"))
+        return "buttons";
+
+    // image
+    if (data.ContainsKey("caption") || data.ContainsKey("imageUrl"))
+        return "image";
+
+    // audio
+    if (data.ContainsKey("audioUrl"))
+        return "audio";
+
+    // document
+    if (data.ContainsKey("fileName"))
+        return "document";
+
+    // button reply (selectedId / buttonId)
+    if (data.ContainsKey("selectedId") || data.ContainsKey("buttonId"))
+        return "button_reply";
+
+    // fallback
+    if (data.ContainsKey("text"))
+        return "text";
+
+    return "text";
+}
     // ── Helper ────────────────────────────────────────────────────────────────
     private static void TryAdd(
         Dictionary<string, object> source,
