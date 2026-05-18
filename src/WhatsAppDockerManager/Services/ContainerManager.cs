@@ -153,6 +153,24 @@ public class ContainerManager : IContainerManager
             }
             // ════════════════════════════════════════════════════════
 
+            // ════════════════════════════════════════════════════════
+
+            // ── הסר containers ישנים לפני sync ───────────────────
+            _logger.LogInformation("🗑️ Removing old containers to force image update...");
+            var existingPhones = await _supabaseService.GetPhonesForHostAsync(_currentHost.Id);
+            foreach (var phone in existingPhones)
+            {
+                if (!string.IsNullOrEmpty(phone.ContainerId))
+                {
+                    _logger.LogInformation("🗑️ Removing container for {Number}", phone.Number);
+                    await _dockerService.StopContainerAsync(phone.ContainerId);
+                    await _dockerService.RemoveContainerAsync(phone.ContainerId);
+                    await _supabaseService.UpdatePhoneDockerStatusAsync(
+                        phone.Id, PhoneDockerStatus.Pending,
+                        containerId: "", containerName: "");
+                }
+            }
+
             await SyncContainersAsync();
 
             _initialized = true;
