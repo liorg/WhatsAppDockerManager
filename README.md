@@ -133,13 +133,13 @@ const status = await fetch('/wa/972501234567/status').then(r => r.json());
 // { "connected": true, "phone": "972501234567", ... }
 ```
 
-## דרישות מקדימות
+# דרישות מקדימות
 
 - .NET 8.0 SDK
 - Docker
 - Supabase account
 
-## התקנה מהירה
+# התקנה מהירה
 
 ### 1. Clone והגדרות
 
@@ -384,6 +384,9 @@ docker logs whatsapp_972-XXXXXXX --tail 50
 
 docker inspect whatsapp_9725xxxxx| grep -A 20 Mounts
 
+docker images | grep whatsapp
+# מחק הכל חוץ מה-latest:
+docker images liorgr/whatsapp-single | grep "<none>" | awk '{print $3}' | xargs docker rmi -f
 ## IMAGE 
  gcloud compute images create whatsapp-server-stable-v1 \
     --source-disk=instance-20260416-115407 \
