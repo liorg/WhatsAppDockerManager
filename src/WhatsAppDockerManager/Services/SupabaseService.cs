@@ -451,7 +451,7 @@ public class SupabaseService : ISupabaseService
         {
             var response = await _client.From<Phone>()
                 .Where(p => p.HostId == hostId)
-                .Where(p => p.Status == "active")
+            //    .Where(p => p.Status == "active")
                 .Get();
             return response.Models;
         }
