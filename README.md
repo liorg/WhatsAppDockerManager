@@ -363,37 +363,12 @@ sudo chmod 755 /opt/whatsapp-data
 # הוסף את המשתמש לקבוצת docker
 sudo usermod -aG docker $USER
 
-# ── systemd service (פרודקשן) 
-sudo tee /etc/systemd/system/whatsapp-manager.service << 'EOF'
-[Unit]
-Description=WhatsApp Docker Manager
-After=network.target docker.service
-Requires=docker.service
-
-[Service]
-Type=simple
-User=lior
-WorkingDirectory=/home/lior/projects/github/WhatsAppDockerManager/src/WhatsAppDockerManager
-ExecStart=/usr/bin/dotnet run --configuration Release
-Restart=always
-RestartSec=10
-Environment=ASPNETCORE_ENVIRONMENT=Production
-Environment=SUPABASE_URL=your_url
-Environment=SUPABASE_KEY=your_key
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-sudo systemctl daemon-reload
-sudo systemctl enable whatsapp-manager
-sudo systemctl start whatsapp-manager
 
 # ── בדיקה 
 
 docker ps
 
-
+sudo systemctl restart whatsapp-manager.service && journalctl -u whatsapp-manager.service -f
 sudo systemctl status whatsapp-manager
 journalctl -u whatsapp-manager -f
 journalctl -u whatsapp-manager -n 50
