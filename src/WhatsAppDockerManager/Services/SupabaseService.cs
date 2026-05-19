@@ -1011,7 +1011,8 @@ public class SupabaseService : ISupabaseService
         _logger.LogDebug("[MSG] Saving content: {Content}", contentJson);
 
         var message = new Message
-        {
+        {    
+            PhoneId           = phoneId,   
             CallId            = null,
             ContactId         = contactId,
             Sender            = sender,
