@@ -12,7 +12,9 @@ public class Message : BaseModel
     [Column("call_id")]
     public Guid? CallId { get; set; }
 
-
+    [Column("phone_id")]
+    public Guid? PhoneId { get; set; }
+     
     [Column("contact_id")]
     public Guid? ContactId { get; set; }
    
