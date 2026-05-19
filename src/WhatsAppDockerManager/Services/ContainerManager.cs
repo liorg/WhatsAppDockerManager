@@ -15,7 +15,7 @@ public interface IContainerManager
     Task TakeOverFromDeadHostAsync(Guid deadHostId);
     Guid? CurrentHostId { get; }
     Task<bool> PausePhoneContainerAsync(Phone phone);
-    string? CurrentImageDigest { get; }  // ← חדש: גרסת ה-image הנוכחית
+    string? CurrentImageDigest { get; }
 }
 
 public class ContainerManager : IContainerManager
@@ -26,16 +26,23 @@ public class ContainerManager : IContainerManager
     private readonly ILogger<ContainerManager> _logger;
     private readonly HostSettings _hostSettings;
     private readonly DockerSettings _dockerSettings;
-    
+
     private DbHost? _currentHost;
     private bool _initialized;
     private readonly SemaphoreSlim _initLock = new(1, 1);
     private readonly SemaphoreSlim _syncLock = new(1, 1);
 
-    // ── Image info — מתאכלס אחרי pull ──────────────────────────────
     public Guid?   CurrentHostId      => _currentHost?.Id;
     public string? CurrentImageDigest { get; private set; }
     private DateTime? _currentImageCreated;
+
+    // ── helper: שם container ייחודי לפי מספר + phone_id ────────────
+    private static string ContainerName(Phone phone) =>
+        $"whatsapp_{phone.Number.Replace("+", "")}_{phone.Id.ToString("N")[..8]}";
+
+    // ── helper: תיקיית auth/logs/contacts ייחודית לפי phone_id ─────
+    private static string PhonePath(string basePath, string folder, Phone phone) =>
+        Path.Combine(basePath, $"{folder}_{phone.Id}");
 
     public ContainerManager(
         IDockerService dockerService,
@@ -60,7 +67,6 @@ public class ContainerManager : IContainerManager
 
             _logger.LogInformation("Initializing Container Manager...");
 
-            // ── זיהוי HostName אוטומטי ───────────────────────────
             var hostName = _hostSettings.HostName;
             if (string.IsNullOrEmpty(hostName))
             {
@@ -68,7 +74,6 @@ public class ContainerManager : IContainerManager
                 _logger.LogInformation("Detected host name: {HostName}", hostName);
             }
 
-            // ── זיהוי IP מקומי אוטומטי ──────────────────────────
             var localIp = _hostSettings.IpAddress;
             if (string.IsNullOrEmpty(localIp) || localIp == "0.0.0.0")
             {
@@ -86,7 +91,6 @@ public class ContainerManager : IContainerManager
                 }
             }
 
-            // ── זיהוי IP חיצוני אוטומטי ─────────────────────────
             var externalIp = _hostSettings.ExternalIp;
             if (string.IsNullOrEmpty(externalIp))
             {
@@ -115,9 +119,6 @@ public class ContainerManager : IContainerManager
             await _dockerService.EnsureNetworkExistsAsync("whatsapp_network");
             await _dockerService.EnsureRedisContainerRunningAsync();
 
-            // ════════════════════════════════════════════════════════
-            // PULL — תמיד מביא את הגרסה העדכנית ביותר
-            // ════════════════════════════════════════════════════════
             _logger.LogInformation("🔄 Pulling latest image: {Image}", _dockerSettings.ImageName);
             try
             {
@@ -129,18 +130,16 @@ public class ContainerManager : IContainerManager
             }
             catch (Exception ex)
             {
-                // pull נכשל — לא עוצרים, ממשיכים עם image קיים
                 _logger.LogWarning(ex, "⚠️ Pull failed for {Image} — continuing with cached version", _dockerSettings.ImageName);
             }
 
-            // ── שמור image info אחרי pull ─────────────────────────
             try
             {
                 var imageInfo = await _dockerService.GetImageInfoAsync(_dockerSettings.ImageName);
                 if (imageInfo != null)
                 {
-                    CurrentImageDigest    = imageInfo.Id;
-                    _currentImageCreated  = imageInfo.Created;
+                    CurrentImageDigest   = imageInfo.Id;
+                    _currentImageCreated = imageInfo.Created;
                     _logger.LogInformation(
                         "📦 Image version: {ShortDigest} | created: {Created}",
                         imageInfo.Id?[..Math.Min(20, imageInfo.Id?.Length ?? 0)],
@@ -151,11 +150,7 @@ public class ContainerManager : IContainerManager
             {
                 _logger.LogWarning(ex, "Could not retrieve image info for {Image}", _dockerSettings.ImageName);
             }
-            // ════════════════════════════════════════════════════════
 
-            // ════════════════════════════════════════════════════════
-
-            // ── הסר containers ישנים לפני sync ───────────────────
             _logger.LogInformation("🗑️ Removing old containers to force image update...");
             var existingPhones = await _supabaseService.GetPhonesForHostAsync(_currentHost.Id);
             foreach (var phone in existingPhones)
@@ -192,7 +187,7 @@ public class ContainerManager : IContainerManager
 
         try
         {
-            _logger.LogInformation("Starting container for phone {PhoneNumber}", phone.Number);
+            _logger.LogInformation("Starting container for phone {PhoneNumber} (id={PhoneId})", phone.Number, phone.Id);
 
             if (phone.HostId == null)
             {
@@ -222,10 +217,11 @@ public class ContainerManager : IContainerManager
                      : "localhost";
             var dockerUrl = $"http://{host}:{fastApiPort}";
 
+            // ── container name ייחודי: מספר + 8 תווים של phone_id ───
             await _supabaseService.UpdatePhoneDockerStatusAsync(
                 phone.Id, PhoneDockerStatus.Running,
                 containerId:   containerId,
-                containerName: $"whatsapp_{phone.Number.Replace("+", "")}",
+                containerName: ContainerName(phone),   // ← תוקן
                 apiPort:       fastApiPort,
                 dockerUrl:     dockerUrl);
 
@@ -251,13 +247,14 @@ public class ContainerManager : IContainerManager
     {
         try
         {
-            var phoneIndex = phone.Number.Replace("+", "");
-            var authPath   = Path.Combine(_dockerSettings.DataBasePath, $"auth_{phoneIndex}");
+            // ── path ייחודי לפי phone.Id — לא לפי number ────────────
+            var authPath  = PhonePath(_dockerSettings.DataBasePath, "auth", phone);
             Directory.CreateDirectory(authPath);
             var credsBytes = Convert.FromBase64String(phone.CredsBase64!);
             var credsPath  = Path.Combine(authPath, "creds.json");
             await File.WriteAllBytesAsync(credsPath, credsBytes);
-            _logger.LogInformation("Restored creds.json for phone {PhoneNumber} → {Path}", phone.Number, credsPath);
+            _logger.LogInformation("Restored creds.json for phone {PhoneNumber} (id={PhoneId}) → {Path}",
+                phone.Number, phone.Id, credsPath);
         }
         catch (Exception ex)
         {
@@ -469,20 +466,20 @@ public class ContainerManager : IContainerManager
         if (_currentHost == null) { _logger.LogError("Host not initialized"); return false; }
         try
         {
-            _logger.LogInformation("Pausing phone {PhoneNumber}", phone.Number);
+            _logger.LogInformation("Pausing phone {PhoneNumber} (id={PhoneId})", phone.Number, phone.Id);
             if (!string.IsNullOrEmpty(phone.ContainerId))
             {
                 await _dockerService.StopContainerAsync(phone.ContainerId);
                 await _dockerService.RemoveContainerAsync(phone.ContainerId);
             }
 
-            var phoneIndex   = phone.Number.Replace("+", "");
-            var authPath     = Path.Combine(_dockerSettings.DataBasePath, $"auth_{phoneIndex}");
-            var logsPath     = Path.Combine(_dockerSettings.DataBasePath, $"logs_{phoneIndex}");
-            var contactsPath = Path.Combine(_dockerSettings.DataBasePath, $"contacts_{phoneIndex}");
+            // ── paths ייחודיים לפי phone.Id — לא לפי number ─────────
+            var authPath     = PhonePath(_dockerSettings.DataBasePath, "auth",     phone);
+            var logsPath     = PhonePath(_dockerSettings.DataBasePath, "logs",     phone);
+            var contactsPath = PhonePath(_dockerSettings.DataBasePath, "contacts", phone);
 
-            if (Directory.Exists(authPath))     Directory.Delete(authPath, recursive: true);
-            if (Directory.Exists(logsPath))     Directory.Delete(logsPath, recursive: true);
+            if (Directory.Exists(authPath))     Directory.Delete(authPath,     recursive: true);
+            if (Directory.Exists(logsPath))     Directory.Delete(logsPath,     recursive: true);
             if (Directory.Exists(contactsPath)) Directory.Delete(contactsPath, recursive: true);
 
             await _supabaseService.UpdatePhoneDockerStatusAsync(phone.Id, PhoneDockerStatus.Stopped, containerId: "", containerName: "", dockerUrl: "");
