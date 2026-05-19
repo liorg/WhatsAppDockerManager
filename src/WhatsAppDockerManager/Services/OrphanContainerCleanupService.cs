@@ -1,6 +1,10 @@
 using WhatsAppDockerManager.Services;
 using WhatsAppDockerManager.Models;
 namespace WhatsAppDockerManager.Services;
+//journalctl -u whatsapp-manager -f --grep "\[Orphan\]"
+//journalctl -u whatsapp-manager --grep "\[Orphan\]" --since "1 hour ago" --no-pager
+//NO LIVE
+//journalctl -u whatsapp-manager --grep "\[Orphan\]" --no-pager | tail -100 
 public class OrphanContainerCleanupService
 {
     private readonly IDockerService _dockerService;
