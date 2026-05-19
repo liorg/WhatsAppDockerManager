@@ -17,10 +17,9 @@ public interface IDockerService
     Task<bool> CheckHealthAsync(string containerId, int apiPort);
     Task EnsureNetworkExistsAsync(string networkName);
     Task EnsureRedisContainerRunningAsync();
-    Task<DockerImageInfo?> GetImageInfoAsync(string imageName);   // ← חדש
+    Task<DockerImageInfo?> GetImageInfoAsync(string imageName);
 }
 
-// ── Model ─────────────────────────────────────────────────────────────
 public class DockerImageInfo
 {
     public string?       Id       { get; set; }
@@ -38,6 +37,14 @@ public class DockerService : IDockerService, IDisposable
 
     private const string RedisContainerName = "redis_shared";
     private const string NetworkName        = "whatsapp_network";
+
+    // ── שם container ייחודי: מספר_טלפון + 8 תווים של phone_id ──────
+    private static string ContainerName(Phone phone) =>
+        $"whatsapp_{phone.Number.Replace("+", "")}_{phone.Id.ToString("N")[..8]}";
+
+    // ── תיקיות ייחודיות לפי phone.Id — לא לפי number ───────────────
+    private static string PhonePath(string basePath, string folder, Phone phone) =>
+        Path.Combine(basePath, $"{folder}_{phone.Id}");
 
     public DockerService(IConfiguration configuration, ILogger<DockerService> logger)
     {
@@ -82,7 +89,6 @@ public class DockerService : IDockerService, IDisposable
         }
     }
 
-    // ── GetImageInfoAsync ─────────────────────────────────────────────
     public async Task<DockerImageInfo?> GetImageInfoAsync(string imageName)
     {
         try
@@ -117,17 +123,18 @@ public class DockerService : IDockerService, IDisposable
     {
         try
         {
-            var containerName = $"whatsapp_{phone.Number.Replace("+", "")}";
-            var phoneIndex    = phone.Number.Replace("+", "");
+            // ── שם ייחודי: מספר + 8 תווים של phone_id ───────────────
+            var containerName = ContainerName(phone);
+
             var (fastApiPort, baileysPort) = PortHashCalculator.GetBothPorts(phone.Number, _configuration);
 
-            _logger.LogInformation("Phone {Phone} → FastAPI:{FastApi} Baileys:{Baileys}",
-                phone.Number, fastApiPort, baileysPort);
+            _logger.LogInformation("Phone {Phone} (id={PhoneId}) → Container:{Name} FastAPI:{FastApi} Baileys:{Baileys}",
+                phone.Number, phone.Id, containerName, fastApiPort, baileysPort);
 
-            var basePath     = _dockerSettings.DataBasePath;
-            var authPath     = Path.Combine(basePath, $"auth_{phoneIndex}");
-            var logsPath     = Path.Combine(basePath, $"logs_{phoneIndex}");
-            var contactsPath = Path.Combine(basePath, $"contacts_{phoneIndex}");
+            // ── תיקיות ייחודיות לפי phone.Id ────────────────────────
+            var authPath     = PhonePath(_dockerSettings.DataBasePath, "auth",     phone);
+            var logsPath     = PhonePath(_dockerSettings.DataBasePath, "logs",     phone);
+            var contactsPath = PhonePath(_dockerSettings.DataBasePath, "contacts", phone);
 
             if (!OperatingSystem.IsWindows())
             {
@@ -136,6 +143,7 @@ public class DockerService : IDockerService, IDisposable
                 Directory.CreateDirectory(contactsPath);
             }
 
+            // ── הסר container ישן עם אותו שם אם קיים ────────────────
             var existingContainers = await _client.Containers
                 .ListContainersAsync(new ContainersListParameters { All = true });
             var existing = existingContainers.FirstOrDefault(c =>
@@ -208,7 +216,7 @@ public class DockerService : IDockerService, IDisposable
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error creating container for phone {Phone}", phone.Number);
+            _logger.LogError(ex, "Error creating container for phone {Phone} (id={PhoneId})", phone.Number, phone.Id);
             return null;
         }
     }
