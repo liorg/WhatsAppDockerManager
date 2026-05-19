@@ -9,7 +9,12 @@
         [PrimaryKey("id")]
         public Guid Id { get; set; }
         
-    
+    // Models/Message.cs — הוסף שדה
+        [JsonPropertyName("phone_id")]
+        [Column("phone_id")]
+        public Guid? PhoneId { get; set; }
+
+        
         //[Column("ping_sender_id")]
         //public Guid? PingSenderId { get; set; }
         
