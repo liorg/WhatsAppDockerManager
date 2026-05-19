@@ -408,10 +408,13 @@ MIT
 
 
 ## RUNNING CRONLAB
+```bash
 sudo /opt/myapp/update.sh
+```
 ##
 
 ## GIT
+```bash
 update version  WhatsAppDockerManager.csproj
 git add WhatsAppDockerManager.csproj
 git add README.md
@@ -420,4 +423,5 @@ git add Controllers
 git status
 git add Controllers
 git commit --m 'vers 18'
-git push 
+git push
+```
