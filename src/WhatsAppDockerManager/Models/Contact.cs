@@ -10,8 +10,7 @@
         public Guid Id { get; set; }
         
 
-        [Column("phone_id")]
-        public Guid? PhoneId { get; set; }
+       
 
         [Column("whatsapp_name")]
         public string? WhatsappName { get; set; }
