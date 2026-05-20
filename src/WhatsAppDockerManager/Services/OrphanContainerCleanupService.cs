@@ -62,18 +62,17 @@ public class OrphanContainerCleanupService
 
                 await _dockerService.RemoveContainerAsync(container.ID);
 
-                if (container.Labels.TryGetValue("phone_number", out var phoneNumber))
+                // ← לפי phone_id (GUID) — תואם ל-PhonePathHelper
+                if (container.Labels.TryGetValue("phone_id", out var phoneIdStr)
+                    && Guid.TryParse(phoneIdStr, out var phoneIdGuid))
                 {
-                    var phoneIndex = phoneNumber.Replace("+", "");
-                    foreach (var folder in new[] { $"auth_{phoneIndex}", $"logs_{phoneIndex}", $"contacts_{phoneIndex}" })
-                    {
-                        var path = Path.Combine(basePath, folder);
-                        if (Directory.Exists(path))
-                        {
-                            Directory.Delete(path, recursive: true);
-                            _logger.LogInformation("[ORPHAN] Deleted: {Path}", path);
-                        }
-                    }
+                    PhonePathHelper.DeleteDirectories(basePath, phoneIdGuid);
+                    _logger.LogInformation("[ORPHAN] Deleted data dirs for phoneId={PhoneId}", phoneIdGuid);
+                }
+                else if (container.Labels.TryGetValue("phone_number", out var phoneNumber))
+                {
+                    // fallback לגרסאות ישנות שאין להן label phone_id
+                    _logger.LogWarning("[ORPHAN] No phone_id label on container {Id} — cannot delete data dirs", container.ID);
                 }
             }
 
@@ -84,4 +83,4 @@ public class OrphanContainerCleanupService
             _logger.LogError(ex, "[ORPHAN] Orphan cleanup failed");
         }
     }
-} 
+}

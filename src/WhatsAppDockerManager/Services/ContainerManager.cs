@@ -190,7 +190,7 @@ public class ContainerManager : IContainerManager
             if (!string.IsNullOrEmpty(phone.CredsBase64))
                 await RestoreCredsAsync(phone);
 
-            var containerId = await _dockerService.CreateAndStartContainerAsync(phone);
+            var containerId = await _dockerService.CreateAndStartContainerAsync(phone, fastApiPort, baileysPort);
 
             if (containerId == null)
             {
@@ -336,10 +336,36 @@ public class ContainerManager : IContainerManager
 
     public async Task<bool> RestartPhoneContainerAsync(Phone phone)
     {
-        await StopPhoneContainerAsync(phone);
+        _logger.LogInformation("[CONTAINER] Restarting phone {PhoneNumber} (id={PhoneId})",
+            phone.Number, phone.Id);
+
+        // ── 1. עצור והסר ────────────────────────────────────────
         if (!string.IsNullOrEmpty(phone.ContainerId))
+        {
+            _logger.LogInformation("[CONTAINER] Stopping container {ContainerId}", phone.ContainerId);
+            await _dockerService.StopContainerAsync(phone.ContainerId);
+            _logger.LogInformation("[CONTAINER] Removing container {ContainerId}", phone.ContainerId);
             await _dockerService.RemoveContainerAsync(phone.ContainerId);
-        return await StartPhoneContainerAsync(phone);
+        }
+        else
+        {
+            // אולי container קיים בשם אבל ללא ID ב-DB
+            var expectedName = PhonePathHelper.ContainerName(phone.Number, phone.Id);
+            _logger.LogWarning("[CONTAINER] No containerId in DB — trying by name: {Name}", expectedName);
+            await _dockerService.RemoveContainerByNameAsync(expectedName);
+        }
+
+        // ── 2. נקה ID לפני Start ─────────────────────────────────
+        phone.ContainerId = null;
+
+        // ── 3. הפעל מחדש ────────────────────────────────────────
+        _logger.LogInformation("[CONTAINER] Starting fresh container for phone {PhoneNumber}", phone.Number);
+        var result = await StartPhoneContainerAsync(phone);
+
+        _logger.LogInformation("[CONTAINER] Restart {Result} for phone {PhoneNumber}",
+            result ? "✓ succeeded" : "✗ failed", phone.Number);
+
+        return result;
     }
 
     public async Task SyncContainersAsync()

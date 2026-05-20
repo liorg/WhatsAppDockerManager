@@ -1013,6 +1013,7 @@ public class SupabaseService : ISupabaseService
         var message = new Message
         {
             CallId            = null,
+            PhoneId           = phoneId,
             ContactId         = contactId,
             Sender            = sender,
             Content           = contentJson,

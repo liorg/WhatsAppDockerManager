@@ -8,7 +8,7 @@ namespace WhatsAppDockerManager.Services;
 public interface IDockerService
 {
     Task<bool> PullImageAsync(string imageName);
-    Task<string?> CreateAndStartContainerAsync(Phone phone);
+    Task<string?> CreateAndStartContainerAsync(Phone phone, int fastApiPort, int baileysPort);
     Task<bool> StopContainerAsync(string containerId);
     Task<bool> RemoveContainerAsync(string containerId);
     Task<ContainerInspectResponse?> InspectContainerAsync(string containerId);
@@ -18,6 +18,7 @@ public interface IDockerService
     Task EnsureNetworkExistsAsync(string networkName);
     Task EnsureRedisContainerRunningAsync();
     Task<DockerImageInfo?> GetImageInfoAsync(string imageName);   // ← חדש
+     Task RemoveContainerByNameAsync(string containerName);
 }
 
 // ── Model ─────────────────────────────────────────────────────────────
@@ -113,42 +114,53 @@ public class DockerService : IDockerService, IDisposable
         }
     }
 
-    public async Task<string?> CreateAndStartContainerAsync(Phone phone)
+    public async Task RemoveContainerByNameAsync(string containerName)
     {
         try
         {
-           _logger.LogInformation("[DOCKER] Creating container for phone {Phone}", phone.Number);
-           var containerName = $"whatsapp_{phone.Number.Replace("+", "")}_{phone.Id.ToString("N")[..8]}";
-   
-            var phoneIndex    = phone.Number.Replace("+", "");
-            _logger.LogInformation("[DOCKER] Calculating ports for phone {Phone} (ID: {PhoneId})", phone.Number, phone.Id); 
-            var (fastApiPort, baileysPort) = PortHashCalculator.GetBothPorts(phone.Id, _configuration);
+            var containers = await _client.Containers
+                .ListContainersAsync(new ContainersListParameters { All = true });
+            var existing = containers.FirstOrDefault(c =>
+                c.Names.Any(n => n.TrimStart('/') == containerName));
+            if (existing == null)
+            {
+                _logger.LogInformation("[DOCKER] No container found with name {Name} — nothing to remove", containerName);
+                return;
+            }
+            await RemoveContainerAsync(existing.ID);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[DOCKER] RemoveContainerByNameAsync failed for {Name}", containerName);
+        }
+    }
 
-            _logger.LogInformation("[DOCKER] CreateAndStartContainerAsync Phone {Phone} → FastAPI:{FastApi} Baileys:{Baileys}",
+    public async Task<string?> CreateAndStartContainerAsync(Phone phone, int fastApiPort, int baileysPort)
+    {
+        try
+        {
+            _logger.LogInformation("[DOCKER] Creating container | phone={Phone} fastApi={FastApi} baileys={Baileys}",
                 phone.Number, fastApiPort, baileysPort);
 
-            var basePath     = _dockerSettings.DataBasePath;
-            var authPath     = Path.Combine(basePath, $"auth_{phone.Id}");
-            var logsPath     = Path.Combine(basePath, $"logs_{phone.Id}");
-            var contactsPath = Path.Combine(basePath, $"contacts_{phone.Id}");
-            _logger.LogInformation("[DOCKER] Data paths for phone {Phone}: auth={Auth} logs={Logs} contacts={Contacts}",
-                phone.Number, authPath, logsPath, contactsPath);
+            var containerName = PhonePathHelper.ContainerName(phone.Number, phone.Id);
+            var basePath      = _dockerSettings.DataBasePath;
+            var authPath      = PhonePathHelper.AuthPath(basePath, phone.Id);
+            var logsPath      = PhonePathHelper.LogsPath(basePath, phone.Id);
+            var contactsPath  = PhonePathHelper.ContactsPath(basePath, phone.Id);
 
-            _logger.LogInformation("[DOCKER] Ensuring data directories exist for phone {Phone}", phone.Number);
-            if (!OperatingSystem.IsWindows())
-            {
-                Directory.CreateDirectory(authPath);
-                Directory.CreateDirectory(logsPath);
-                Directory.CreateDirectory(contactsPath);
-            }
+            _logger.LogInformation("[DOCKER] Paths: auth={Auth} logs={Logs} contacts={Contacts}",
+                authPath, logsPath, contactsPath);
 
+            PhonePathHelper.EnsureDirectoriesExist(basePath, phone.Id);
+
+            // הסר container קיים עם אותו שם
             var existingContainers = await _client.Containers
                 .ListContainersAsync(new ContainersListParameters { All = true });
             var existing = existingContainers.FirstOrDefault(c =>
                 c.Names.Any(n => n.TrimStart('/') == containerName));
             if (existing != null)
             {
-                _logger.LogWarning("[DOCKER]  Container {Name} already exists, removing...", containerName);
+                _logger.LogWarning("[DOCKER] Container {Name} already exists, removing...", containerName);
                 await RemoveContainerAsync(existing.ID);
             }
 
@@ -195,7 +207,9 @@ public class DockerService : IDockerService, IDisposable
                         { "baileys_port", baileysPort.ToString() }
                     }
                 });
+
             _logger.LogInformation("[DOCKER] Container {Name} created with ID {Id}", containerName, createResponse.ID);
+
             var started = await _client.Containers
                 .StartContainerAsync(createResponse.ID, new ContainerStartParameters());
 
@@ -208,7 +222,7 @@ public class DockerService : IDockerService, IDisposable
             await _client.Networks.ConnectNetworkAsync(NetworkName,
                 new NetworkConnectParameters { Container = createResponse.ID });
 
-            _logger.LogInformation("[DOCKER] Container {Name} started. FastAPI:{FastApi} Baileys:{Baileys}",
+            _logger.LogInformation("[DOCKER] ✓ Container {Name} started. FastAPI:{FastApi} Baileys:{Baileys}",
                 containerName, fastApiPort, baileysPort);
             return createResponse.ID;
         }
