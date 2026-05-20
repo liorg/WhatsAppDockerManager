@@ -54,7 +54,8 @@ public class Phone : BaseModel
     [Column("creds_base64")]
     public string? CredsBase64 { get; set; }
 
-    
+    [Column("auth_session_id")]
+public string? AuthSessionId { get; set; }
 
     [Column("created_at")]
     public DateTime CreatedAt { get; set; }

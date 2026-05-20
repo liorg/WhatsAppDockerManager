@@ -174,6 +174,7 @@ public class ContainerManager : IContainerManager
 
         try
         {
+
             _logger.LogInformation("[CONTAINER] Starting container for phone {PhoneNumber}", phone.Number);
 
             if (phone.HostId == null)
@@ -210,6 +211,18 @@ public class ContainerManager : IContainerManager
 
             if (!string.IsNullOrEmpty(phone.CredsBase64))
                 await RestoreCredsAsync(phone);
+
+
+            // כאן להוסיף
+            var authSessionId = Guid.NewGuid().ToString();
+
+            await _supabaseService.UpdateAuthSessionAsync(phone.Id, authSessionId);
+            phone.AuthSessionId = authSessionId;
+
+            _logger.LogInformation(
+                "[CONTAINER] Auth session created. PhoneId={PhoneId}, AuthSessionId={AuthSessionId}",
+                phone.Id,
+                authSessionId);
 
             var containerId = await _dockerService.CreateAndStartContainerAsync(phone, fastApiPort, baileysPort);
 

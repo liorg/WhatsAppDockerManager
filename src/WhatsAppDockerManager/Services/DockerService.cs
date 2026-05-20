@@ -175,6 +175,7 @@ public class DockerService : IDockerService, IDisposable
                         $"PHONE_NUMBER={phone.Number}",
                         $"PHONE_ID={phone.Id}",
                         $"REDIS_URL=redis://{RedisContainerName}:6379",
+                        $"AUTH_SESSION_ID={phone.AuthSessionId}",
                     },
                     ExposedPorts = new Dictionary<string, EmptyStruct>
                     {

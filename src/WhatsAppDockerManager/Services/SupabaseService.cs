@@ -75,6 +75,8 @@ public interface ISupabaseService
     Task SetPhoneStatusAsync(Guid phoneId, string status);
     Task DeletePhoneAsync(Guid phoneId);
     Task<List<Phone>> GetPhonesByNumberAsync(string phoneNumber);
+
+    Task UpdateAuthSessionAsync(Guid phoneId, string authSessionId);
 }
 
 public class SupabaseService : ISupabaseService
@@ -106,6 +108,8 @@ public class SupabaseService : ISupabaseService
     }
 
     #region Host Operations
+
+
 
     public async Task<DbHost?> GetOrCreateHostAsync(string hostName, string ipAddress, string? externalIp, int portRangeStart, int portRangeEnd, int maxContainers)
     {
@@ -276,6 +280,15 @@ public class SupabaseService : ISupabaseService
     #endregion
 
     #region Phone Operations
+
+    public async Task UpdateAuthSessionAsync(Guid phoneId, string authSessionId)
+{
+    await _client
+        .From<Phone>()
+        .Where(p => p.Id == phoneId)
+        .Set(p => p.AuthSessionId, authSessionId)
+        .Update();
+}
 
     public async Task ClearPhoneCredsAsync(Guid phoneId)
 {

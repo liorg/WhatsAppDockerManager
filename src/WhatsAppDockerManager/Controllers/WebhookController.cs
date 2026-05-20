@@ -79,7 +79,7 @@ private static readonly ConcurrentDictionary<string, SemaphoreSlim>
     /// <param name="payload"></param>
     /// <returns></returns>
     /// journalctl -u whatsapp-manager.service   -f --no-pager | grep "[AUTH]"
-  private async Task HandleAuthenticated(Guid phoneId, Phone phone, ContainerEventPayload payload)
+private async Task HandleAuthenticated(Guid phoneId, Phone phone, ContainerEventPayload payload)
 {
     _logger.LogInformation("[AUTH] Phone {PhoneId} authenticated as {Phone}", phoneId, payload.Phone);
 
@@ -89,75 +89,59 @@ private static readonly ConcurrentDictionary<string, SemaphoreSlim>
     var number = "+" + payload.Phone.Replace("+", "");
     _logger.LogInformation("[AUTH] Authenticated phone number: {Number}", number);
 
-    await _supabaseService.UpdatePhoneDockerStatusAsync(phoneId, PhoneDockerStatus.Running);
+    // creds נשמר תמיד לפי ה-phoneId ששלח webhook
+    if (!string.IsNullOrEmpty(payload.CredsB64))
+    {
+        var hash = Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(
+                System.Text.Encoding.UTF8.GetBytes(payload.CredsB64)
+            )
+        )[..12];
+
+        _logger.LogInformation(
+            "[AUTH] Got creds from container. PhoneId={PhoneId}, Len={Len}, Hash={Hash}",
+            phoneId,
+            payload.CredsB64.Length,
+            hash);
+
+        await _supabaseService.UpdatePhoneCredsAsync(phoneId, payload.CredsB64);
+    }
 
     var sem = _numberLocks.GetOrAdd(number, _ => new SemaphoreSlim(1, 1));
     await sem.WaitAsync();
 
     try
     {
-        var others = await _supabaseService.GetPhonesByNumberAsync(number);
+        var freshPhone = await _supabaseService.GetPhoneByIdAsync(phoneId);
 
-        _logger.LogInformation(
-            "[AUTH] Found {Count} phones with number {Number}",
-            others.Count,
-            number);
-
-        var winner = others
-            .Where(p => p.Status == "active")
-            .OrderByDescending(p => p.CreatedAt)
-            .FirstOrDefault();
-
-        if (winner == null)
-        {
-            _logger.LogWarning("[AUTH] No active winner found. Marking current phone active {PhoneId}", phoneId);
-            await _supabaseService.SetPhoneStatusAsync(phoneId, "active");
-            winner = await _supabaseService.GetPhoneByIdAsync(phoneId);
-        }
-
-        if (winner == null || winner.Id != phoneId)
+        if (freshPhone?.AuthSessionId != payload.AuthSessionId)
         {
             _logger.LogWarning(
-                "[AUTH] Phone {PhoneId} lost takeover. Winner={WinnerId}. Marking current inactive",
+                "[AUTH] Saved creds, but stale session. Not changing status. PhoneId={PhoneId}, PayloadSession={PayloadSession}, DbSession={DbSession}",
                 phoneId,
-                winner?.Id);
+                payload.AuthSessionId,
+                freshPhone?.AuthSessionId);
 
-            await _supabaseService.SetPhoneStatusAsync(phoneId, "inactive");
             return;
         }
 
-        var losers = others
-            .Where(p => p.Id != phoneId && p.Status == "active")
-            .ToList();
+        await _supabaseService.SetPhoneStatusAsync(phoneId, "active");
+        await _supabaseService.UpdatePhoneDockerStatusAsync(phoneId, PhoneDockerStatus.Running);
 
-        foreach (var loser in losers)
+        var others = await _supabaseService.GetPhonesByNumberAsync(number);
+
+        foreach (var oldPhone in others.Where(p => p.Id != phoneId && p.Status == "active"))
         {
             _logger.LogWarning(
-                "[AUTH] Takeover: marking old phone inactive {OldPhoneId} → {NewPhoneId}",
-                loser.Id,
+                "[AUTH] Takeover by valid session: {OldPhoneId} → {NewPhoneId}",
+                oldPhone.Id,
                 phoneId);
 
-            await _supabaseService.SetPhoneStatusAsync(loser.Id, "inactive");
+            await _supabaseService.SetPhoneStatusAsync(oldPhone.Id, "inactive");
+            await _supabaseService.UpdatePhoneDockerStatusAsync(oldPhone.Id, PhoneDockerStatus.Stopped);
         }
 
-        if (!string.IsNullOrEmpty(payload.CredsB64))
-        {
-            var hash = Convert.ToHexString(
-                System.Security.Cryptography.SHA256.HashData(
-                    System.Text.Encoding.UTF8.GetBytes(payload.CredsB64)
-                )
-            )[..12];
-
-            _logger.LogInformation(
-                "[AUTH] Got creds from winner container. PhoneId={PhoneId}, Len={Len}, Hash={Hash}",
-                phoneId,
-                payload.CredsB64.Length,
-                hash);
-
-            await _supabaseService.UpdatePhoneCredsAsync(phoneId, payload.CredsB64);
-
-            _logger.LogInformation("[AUTH] ✓ Saved creds for winner phone {PhoneId}", phoneId);
-        }
+        _logger.LogInformation("[AUTH] ✓ Valid session. Phone {PhoneId} is active", phoneId);
     }
     finally
     {
@@ -348,6 +332,10 @@ private static readonly ConcurrentDictionary<string, SemaphoreSlim>
 
             // ── buttons ───────────────────────────────────────────
             TryAdd(payload.Data, messageContent, "buttons");
+
+          //  TryAdd(payload.Data, messageContent, "fromMe");
+          //  TryAdd(payload.Data, messageContent, "pushName");
+          //  TryAdd(payload.Data, messageContent, "lid");
         }
 
         // type תמיד נשמר
@@ -390,4 +378,10 @@ public class ContainerEventPayload
     [JsonPropertyName("phone")]     public string? Phone     { get; set; }
     [JsonPropertyName("name")]      public string? Name      { get; set; }
     [JsonPropertyName("creds_b64")] public string? CredsB64  { get; set; }
+
+      [JsonPropertyName("authSessionId")]
+    public string? AuthSessionId { get; set; }
+
+    [JsonPropertyName("phoneId")]
+    public Guid? PayloadPhoneId { get; set; }
 }
