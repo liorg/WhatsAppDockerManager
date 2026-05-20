@@ -214,17 +214,18 @@ public class ContainerManager : IContainerManager
 
 
             // כאן להוסיף
-            var authSessionId = Guid.NewGuid().ToString();
+           // ── הגדל revision לפני הפעלת container ──────────────────────────
+             var revision = await _supabaseService.IncrementPhoneRevisionAsync(phone.Id);
 
-            await _supabaseService.UpdateAuthSessionAsync(phone.Id, authSessionId);
-            phone.AuthSessionId = authSessionId;
+          //  await _supabaseService.UpdateAuthSessionAsync(phone.Id, authSessionId);
+          //  phone.AuthSessionId = authSessionId;
 
             _logger.LogInformation(
-                "[CONTAINER] Auth session created. PhoneId={PhoneId}, AuthSessionId={AuthSessionId}",
+                "[CONTAINER] Auth session created. PhoneId={PhoneId}, revision={revision}",
                 phone.Id,
-                authSessionId);
+                revision);
 
-            var containerId = await _dockerService.CreateAndStartContainerAsync(phone, fastApiPort, baileysPort);
+            var containerId = await _dockerService.CreateAndStartContainerAsync(phone, fastApiPort, baileysPort,revision);
 
             if (containerId == null)
             {
