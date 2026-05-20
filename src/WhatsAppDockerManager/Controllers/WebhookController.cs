@@ -70,19 +70,36 @@ public class WebhookController : ControllerBase
     }
 
     private async Task HandleAuthenticated(Guid phoneId, Phone phone, ContainerEventPayload payload)
+{
+    _logger.LogInformation("Phone {PhoneId} authenticated as {Phone}", phoneId, payload.Phone);
+
+    // ── וודא שה-phone number תואם ──────────────────────────────
+    // מונע שמירת creds של phone אחד על phone אחר
+    if (!string.IsNullOrEmpty(payload.Phone))
     {
-        _logger.LogInformation("Phone {PhoneId} authenticated as {Phone}", phoneId, payload.Phone);
-        await _supabaseService.UpdatePhoneDockerStatusAsync(phoneId, PhoneDockerStatus.Running);
+        var cleanPayloadPhone  = new string(payload.Phone.Where(char.IsDigit).ToArray());
+        var cleanPhoneNumber   = new string((phone.Number ?? "").Where(char.IsDigit).ToArray());
 
-        if (!string.IsNullOrEmpty(payload.Phone))
-            await _supabaseService.UpdatePhoneNumberAsync(phoneId, "+" + payload.Phone.Replace("+", ""));
-
-        if (!string.IsNullOrEmpty(payload.CredsB64))
+        if (!cleanPhoneNumber.EndsWith(cleanPayloadPhone) && !cleanPayloadPhone.EndsWith(cleanPhoneNumber))
         {
-            await _supabaseService.UpdatePhoneCredsAsync(phoneId, payload.CredsB64);
-            _logger.LogInformation("RAW-PAYLOAD] Saved creds_base64 for phone {PhoneId}", phoneId);
+            _logger.LogError(
+                "[WEBHOOK] ⛔ Phone mismatch! phoneId={PhoneId} registered={Registered} payload={Payload} — IGNORING creds",
+                phoneId, cleanPhoneNumber, cleanPayloadPhone);
+            return;
         }
     }
+
+    await _supabaseService.UpdatePhoneDockerStatusAsync(phoneId, PhoneDockerStatus.Running);
+
+    if (!string.IsNullOrEmpty(payload.Phone))
+        await _supabaseService.UpdatePhoneNumberAsync(phoneId, "+" + payload.Phone.Replace("+", ""));
+
+    if (!string.IsNullOrEmpty(payload.CredsB64))
+    {
+        await _supabaseService.UpdatePhoneCredsAsync(phoneId, payload.CredsB64);
+        _logger.LogInformation("[WEBHOOK] ✓ Saved creds for phone {PhoneId}", phoneId);
+    }
+}
 
     private async Task HandleIncomingMessage(Guid phoneId, Phone phone, ContainerEventPayload payload)
     {
