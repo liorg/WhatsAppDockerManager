@@ -29,33 +29,7 @@ public class PhonesController : ControllerBase
         _logger           = logger;
     }
 
-    [HttpPost("{phoneId}/logoutold")]
-    public async Task<IActionResult> logoutold(Guid phoneId)
-    {
-        var phone = await _supabaseService.GetPhoneByIdAsync(phoneId);
-        if (phone == null) return NotFound(new { error = "Phone not found" });
 
-        try
-        {
-            if (!string.IsNullOrEmpty(phone.ContainerId))
-                await _dockerService.StopContainerAsync(phone.ContainerId);
-
-            var phoneIndex = phone.Number.Replace("+", "");
-            var authPath = Path.Combine(_configuration["AppSettings:Docker:DataBasePath"] ?? "/opt/whatsapp-data", $"auth_{phoneIndex}");
-
-            if (Directory.Exists(authPath)) { Directory.Delete(authPath, recursive: true); Directory.CreateDirectory(authPath); }
-
-            await _supabaseService.UpdatePhoneDockerStatusAsync(phoneId, PhoneDockerStatus.Pending);
-            await _containerManager.StartPhoneContainerAsync(phone);
-
-            return Ok(new { success = true, message = "Logged out. Wait 10 seconds then get new QR.", qrUrl = $"/api/phones/{phoneId}/qrcode" });
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error during logout for phone {PhoneId}", phoneId);
-            return StatusCode(500, new { error = ex.Message });
-        }
-    }
 
     [HttpPost("{phoneId}/logout")]
     public async Task<IActionResult> Logout(Guid phoneId)
@@ -70,8 +44,7 @@ public class PhonesController : ControllerBase
 
             var phoneIndex = phone.Number.Replace("+", "");
             var basePath   = _configuration["AppSettings:Docker:DataBasePath"] ?? "/opt/whatsapp-data";
-            var authPath   = Path.Combine(basePath, $"auth_{phoneIndex}");
-
+            var authPath = Path.Combine(basePath, $"auth_{phone.Id}");
             if (Directory.Exists(authPath)) Directory.Delete(authPath, recursive: true);
             Directory.CreateDirectory(authPath);
 
@@ -108,11 +81,13 @@ public class PhonesController : ControllerBase
         if (phone == null) return NotFound(new { error = "Phone not found" });
         return Ok(new { id = phone.Id, number = phone.Number, label = phone.Label, dockerStatus = phone.DockerStatus, apiPort = phone.ApiPort, lastHealthCheck = phone.LastHealthCheck });
     }
+    // ══════════════════════════════════════════════════════════════════
+    //journalctl -u whatsapp-manager.service -f --no-pager | grep "PROVISION"
 
     // ══════════════════════════════════════════════════════════════════
     // Provision — upsert לפי number + user_id
     // ══════════════════════════════════════════════════════════════════
-    [HttpPost("provision")]
+  [HttpPost("provision")]
     public async Task<IActionResult> Provision([FromBody] ProvisionRequest request)
     {
         if (string.IsNullOrWhiteSpace(request.PhoneNumber))
@@ -122,102 +97,156 @@ public class PhonesController : ControllerBase
         if (!isValid)
             return BadRequest(new { error = validationError });
 
-        var fastApiPort = PortHashCalculator.GetFastApiPort(normalizedPhone!, _configuration);
-        _logger.LogInformation("[PROVISION] {Phone} user={UserId} port={Port}",
-            normalizedPhone, request.UserId, fastApiPort);
+        _logger.LogInformation("[PROVISION] ▶ Start | phone={Phone} user={UserId}",
+            normalizedPhone, request.UserId);
 
-        // ── Upsert: חפש לפי number + user_id בלבד ──────────────────
-        // אם אין userId — חפש לפי מספר בלבד (backward compat)
+        // ── 1. Get or Create phone record ──────────────────────────
         Phone phone;
         bool  isNew;
-
-        if (request.UserId.HasValue)
+        try
         {
-            // ← הפתרון: GetOrCreatePhoneAsync מונע כפילות per-user
-            (phone, isNew) = await _supabaseService.GetOrCreatePhoneAsync(
-                normalizedPhone!,
-                request.UserId.Value,
-                request.Nickname);
-        }
-        else
-        {
-            // fallback ללא userId
-            var existing = await _supabaseService.GetPhoneByNumberAsync(normalizedPhone!);
-            if (existing != null)
+            if (request.UserId.HasValue)
             {
-                phone = existing;
-                isNew = false;
+                (phone, isNew) = await _supabaseService.GetOrCreatePhoneAsync(
+                    normalizedPhone!, request.UserId.Value, request.Nickname);
+                _logger.LogInformation("[PROVISION] DB | phoneId={PhoneId} isNew={IsNew}",
+                    phone.Id, isNew);
             }
             else
             {
-                phone = await _supabaseService.CreatePhoneAsync(new Phone
+                var existing = await _supabaseService.GetPhoneByNumberAsync(normalizedPhone!);
+                if (existing != null)
                 {
-                    Id           = Guid.NewGuid(),
-                    Number       = normalizedPhone!,
-                    Label        = request.Nickname,
-                    Color        = request.Tag,
-                    Status       = "active",
-                    DockerStatus = PhoneDockerStatus.Pending,
-                    ApiPort      = fastApiPort,
-                });
-                isNew = true;
+                    phone = existing; isNew = false;
+                    _logger.LogInformation("[PROVISION] DB | found existing phoneId={PhoneId}", phone.Id);
+                }
+                else
+                {
+                    phone = await _supabaseService.CreatePhoneAsync(new Phone
+                    {
+                        Id = Guid.NewGuid(), Number = normalizedPhone!,
+                        Label = request.Nickname, Color = request.Tag,
+                        Status = "active", DockerStatus = PhoneDockerStatus.Pending,
+                    });
+                    isNew = true;
+                    _logger.LogInformation("[PROVISION] DB | created new phoneId={PhoneId}", phone.Id);
+                }
             }
         }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[PROVISION] ✗ DB lookup/create failed | phone={Phone}", normalizedPhone);
+            return StatusCode(500, new { error = "Database error: " + ex.Message });
+        }
 
-        // ── עדכן user_id אם חסר ────────────────────────────────────
+        // ── 2. Compute ports by GUID ────────────────────────────────
+        var (fastApiPort, baileysPort) = PortHashCalculator.GetBothPorts(phone.Id, _configuration);
+        _logger.LogInformation("[PROVISION] Ports | phoneId={PhoneId} fastApi={FastApi} baileys={Baileys}",
+            phone.Id, fastApiPort, baileysPort);
+
+        // ── 3. Update userId if missing ─────────────────────────────
         if (request.UserId.HasValue &&
             (phone.UserId == Guid.Empty || phone.UserId == null || phone.UserId != request.UserId))
         {
+            _logger.LogInformation("[PROVISION] UserId | updating phoneId={PhoneId} userId={UserId}",
+                phone.Id, request.UserId);
             await _supabaseService.UpdatePhoneUserIdAsync(phone.Id, request.UserId.Value);
             phone.UserId = request.UserId.Value;
         }
 
-        // ── Container — רק אם חדש OR לא רץ ────────────────────────
-        var containerRunning = !string.IsNullOrEmpty(phone.ContainerId)
-            && await _dockerService.IsContainerRunningAsync(phone.ContainerId);
+        // ── 4. Check if container already running ───────────────────
+        bool containerRunning = false;
+        try
+        {
+            containerRunning = !string.IsNullOrEmpty(phone.ContainerId)
+                && await _dockerService.IsContainerRunningAsync(phone.ContainerId);
+            _logger.LogInformation("[PROVISION] Container check | containerId={ContainerId} running={Running}",
+                phone.ContainerId ?? "none", containerRunning);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[PROVISION] Container check failed | containerId={ContainerId} — assuming not running",
+                phone.ContainerId);
+        }
 
+        // ── 5. Start container if needed ────────────────────────────
         if (!containerRunning)
         {
-            _logger.LogInformation("[PROVISION] Starting container for phone {Id} (isNew={IsNew})",
+            _logger.LogInformation("[PROVISION] Starting container | phoneId={PhoneId} isNew={IsNew}",
                 phone.Id, isNew);
-            var started = await _containerManager.StartPhoneContainerAsync(phone);
+            bool started;
+            try
+            {
+                started = await _containerManager.StartPhoneContainerAsync(phone);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[PROVISION] ✗ StartPhoneContainerAsync threw | phoneId={PhoneId}", phone.Id);
+                return StatusCode(500, new { error = "Container start exception: " + ex.Message });
+            }
+
             if (!started)
+            {
+                _logger.LogError("[PROVISION] ✗ StartPhoneContainerAsync returned false | phoneId={PhoneId}", phone.Id);
                 return StatusCode(500, new { error = "Failed to start container" });
+            }
+
+            _logger.LogInformation("[PROVISION] ✓ Container started | phoneId={PhoneId} — waiting 3s", phone.Id);
             await Task.Delay(3000);
         }
         else
         {
-            _logger.LogInformation("[PROVISION] Phone {Id} container already running — skipping start",
-                phone.Id);
+            _logger.LogInformation("[PROVISION] ↷ Skipping start — container already running | phoneId={PhoneId}", phone.Id);
         }
 
-        var waStatus = await GetContainerStatus(fastApiPort);
+        // ── 6. Check WhatsApp status ────────────────────────────────
+        string waStatus;
+        try
+        {
+            waStatus = await GetContainerStatus(fastApiPort);
+            _logger.LogInformation("[PROVISION] WA status | phoneId={PhoneId} port={Port} status={Status}",
+                phone.Id, fastApiPort, waStatus);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[PROVISION] WA status check failed | port={Port}", fastApiPort);
+            waStatus = "unavailable";
+        }
 
         if (waStatus == "connected")
+        {
+            _logger.LogInformation("[PROVISION] ✓ Done — connected | phoneId={PhoneId}", phone.Id);
             return Ok(new ProvisionResponse
             {
-                PhoneId     = phone.Id,
-                PhoneNumber = normalizedPhone!,
-                Label       = phone.Label,
-                Color       = phone.Color,
-                Port        = fastApiPort,
-                Status      = "connected",
-                Message     = "Phone is already connected",
+                PhoneId = phone.Id, PhoneNumber = normalizedPhone!,
+                Label = phone.Label, Color = phone.Color,
+                Port = fastApiPort, Status = "connected",
+                Message = "Phone is already connected",
             });
+        }
 
-        var qrData = await GetContainerQr(fastApiPort);
+        // ── 7. Get QR ───────────────────────────────────────────────
+        ContainerQrResponse? qrData = null;
+        try
+        {
+            qrData = await GetContainerQr(fastApiPort);
+            _logger.LogInformation("[PROVISION] QR | phoneId={PhoneId} hasQr={HasQr}",
+                phone.Id, qrData?.Qr != null);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[PROVISION] QR fetch failed | port={Port}", fastApiPort);
+        }
+
+        _logger.LogInformation("[PROVISION] ✓ Done — qr_ready | phoneId={PhoneId}", phone.Id);
         return Ok(new ProvisionResponse
         {
-            PhoneId      = phone.Id,
-            PhoneNumber  = normalizedPhone!,
-            Label        = phone.Label,
-            Color        = phone.Color,
-            Port         = fastApiPort,
-            Status       = "qr_ready",
-            QrCode       = qrData?.Qr,
-            QrImageBase64 = qrData?.QrImageBase64,
+            PhoneId = phone.Id, PhoneNumber = normalizedPhone!,
+            Label = phone.Label, Color = phone.Color,
+            Port = fastApiPort, Status = "qr_ready",
+            QrCode = qrData?.Qr, QrImageBase64 = qrData?.QrImageBase64,
             QrRefreshUrl = $"/api/phones/{phone.Id}/qrcode",
-            Message      = "Scan the QR code to connect",
+            Message = "Scan the QR code to connect",
         });
     }
 
@@ -227,7 +256,7 @@ public class PhonesController : ControllerBase
         var phone = await _supabaseService.GetPhoneByIdAsync(id);
         if (phone == null) return NotFound(new { error = "Phone not found" });
 
-        var (fastApiPort, _) = PortHashCalculator.GetBothPorts(phone.Number, _configuration);
+var (fastApiPort, baileysPort) = PortHashCalculator.GetBothPorts(phone.Id, _configuration);
         var waStatus = await GetContainerStatus(fastApiPort);
 
         if (waStatus == "connected")
@@ -246,7 +275,7 @@ public class PhonesController : ControllerBase
         var phone = await _supabaseService.GetPhoneByIdAsync(id);
         if (phone == null) return NotFound();
 
-        var (fastApiPort, _) = PortHashCalculator.GetBothPorts(phone.Number, _configuration);
+        var (fastApiPort, baileysPort) = PortHashCalculator.GetBothPorts(phone.Id, _configuration);
         using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
         try
         {
@@ -278,7 +307,7 @@ public class PhonesController : ControllerBase
         if (!started) return StatusCode(500, new { error = "Failed to resume phone" });
 
         await Task.Delay(3000);
-        var (fastApiPort, _) = PortHashCalculator.GetBothPorts(phone.Number, _configuration);
+        var (fastApiPort, baileysPort) = PortHashCalculator.GetBothPorts(phone.Id, _configuration);
         var waStatus = await GetContainerStatus(fastApiPort);
 
         if (waStatus == "connected")

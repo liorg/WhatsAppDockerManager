@@ -58,14 +58,14 @@ public class ContainerManager : IContainerManager
         {
             if (_initialized) return;
 
-            _logger.LogInformation("Initializing Container Manager...");
+            _logger.LogInformation("[CONTAINER] Initializing Container Manager...");
 
             // ── זיהוי HostName אוטומטי ───────────────────────────
             var hostName = _hostSettings.HostName;
             if (string.IsNullOrEmpty(hostName))
             {
                 hostName = System.Net.Dns.GetHostName();
-                _logger.LogInformation("Detected host name: {HostName}", hostName);
+                _logger.LogInformation("[CONTAINER] Detected host name: {HostName}", hostName);
             }
 
             // ── זיהוי IP מקומי אוטומטי ──────────────────────────
@@ -78,11 +78,11 @@ public class ContainerManager : IContainerManager
                         .AddressList
                         .FirstOrDefault(a => a.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
                         ?.ToString() ?? "0.0.0.0";
-                    _logger.LogInformation("Detected local IP: {LocalIp}", localIp);
+                    _logger.LogInformation("[CONTAINER] Detected local IP: {LocalIp}", localIp);
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogWarning(ex, "Could not detect local IP");
+                    _logger.LogWarning(ex, "[CONTAINER] Could not detect local IP");
                 }
             }
 
@@ -94,11 +94,11 @@ public class ContainerManager : IContainerManager
                 {
                     using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
                     externalIp = (await http.GetStringAsync("http://checkip.amazonaws.com")).Trim();
-                    _logger.LogInformation("Detected external IP: {ExternalIp}", externalIp);
+                    _logger.LogInformation("[CONTAINER] Detected external IP: {ExternalIp}", externalIp);
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogWarning(ex, "Could not detect external IP — using local IP as fallback");
+                    _logger.LogWarning(ex, "[CONTAINER] Could not detect external IP — using local IP as fallback");
                     externalIp = localIp;
                 }
             }
@@ -108,9 +108,9 @@ public class ContainerManager : IContainerManager
                 _hostSettings.PortRangeStart, _hostSettings.PortRangeEnd, _hostSettings.MaxContainers);
 
             if (_currentHost == null)
-                throw new InvalidOperationException("Failed to register host in database");
+                throw new InvalidOperationException("[CONTAINER] Failed to register host in database");
 
-            _logger.LogInformation("Host registered: {HostId} ({HostName})", _currentHost.Id, _currentHost.HostName);
+            _logger.LogInformation("[CONTAINER] Host registered: {HostId} ({HostName})", _currentHost.Id, _currentHost.HostName);
 
             await _dockerService.EnsureNetworkExistsAsync("whatsapp_network");
             await _dockerService.EnsureRedisContainerRunningAsync();
@@ -118,19 +118,19 @@ public class ContainerManager : IContainerManager
             // ════════════════════════════════════════════════════════
             // PULL — תמיד מביא את הגרסה העדכנית ביותר
             // ════════════════════════════════════════════════════════
-            _logger.LogInformation("🔄 Pulling latest image: {Image}", _dockerSettings.ImageName);
+            _logger.LogInformation("[CONTAINER] Pulling latest image: {Image}", _dockerSettings.ImageName);
             try
             {
                 var pullSuccess = await _dockerService.PullImageAsync(_dockerSettings.ImageName);
                 if (pullSuccess)
-                    _logger.LogInformation("✅ Image pulled successfully: {Image}", _dockerSettings.ImageName);
+                    _logger.LogInformation("[CONTAINER]     ✅ Image pulled successfully: {Image}", _dockerSettings.ImageName);
                 else
-                    _logger.LogWarning("⚠️ Pull returned false for {Image} — using cached version", _dockerSettings.ImageName);
+                    _logger.LogWarning("[CONTAINER] ⚠️ Pull returned false for {Image} — using cached version", _dockerSettings.ImageName);
             }
             catch (Exception ex)
             {
                 // pull נכשל — לא עוצרים, ממשיכים עם image קיים
-                _logger.LogWarning(ex, "⚠️ Pull failed for {Image} — continuing with cached version", _dockerSettings.ImageName);
+                _logger.LogWarning(ex, "[CONTAINER] ⚠️ Pull failed for {Image} — continuing with cached version", _dockerSettings.ImageName);
             }
 
             // ── שמור image info אחרי pull ─────────────────────────
@@ -142,21 +142,21 @@ public class ContainerManager : IContainerManager
                     CurrentImageDigest    = imageInfo.Id;
                     _currentImageCreated  = imageInfo.Created;
                     _logger.LogInformation(
-                        "📦 Image version: {ShortDigest} | created: {Created}",
+                        "[CONTAINER] 📦 Image version: {ShortDigest} | created: {Created}",
                         imageInfo.Id?[..Math.Min(20, imageInfo.Id?.Length ?? 0)],
                         imageInfo.Created.ToString("yyyy-MM-dd HH:mm:ss UTC"));
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Could not retrieve image info for {Image}", _dockerSettings.ImageName);
+                _logger.LogWarning(ex, "[CONTAINER] Could not retrieve image info for {Image}", _dockerSettings.ImageName);
             }
             // ════════════════════════════════════════════════════════
 
             await SyncContainersAsync();
 
             _initialized = true;
-            _logger.LogInformation("Container Manager initialized successfully");
+            _logger.LogInformation("[CONTAINER] Container Manager initialized successfully");
         }
         finally
         {
@@ -168,24 +168,24 @@ public class ContainerManager : IContainerManager
     {
         if (_currentHost == null)
         {
-            _logger.LogError("Host not initialized");
+            _logger.LogError("[CONTAINER] Host not initialized");
             return false;
         }
 
         try
         {
-            _logger.LogInformation("Starting container for phone {PhoneNumber}", phone.Number);
+            _logger.LogInformation("[CONTAINER] Starting container for phone {PhoneNumber}", phone.Number);
 
             if (phone.HostId == null)
             {
-                _logger.LogInformation("Assigning phone {PhoneNumber} to host {HostId}", phone.Number, _currentHost.Id);
+                _logger.LogInformation("[CONTAINER] Assigning phone {PhoneNumber} to host {HostId}", phone.Number, _currentHost.Id);
                 await _supabaseService.AssignPhoneToHostAsync(phone.Id, _currentHost.Id);
                 phone.HostId = _currentHost.Id;
             }
 
             await _supabaseService.UpdatePhoneDockerStatusAsync(phone.Id, PhoneDockerStatus.Starting);
 
-            var (fastApiPort, baileysPort) = PortHashCalculator.GetBothPorts(phone.Number, _configuration);
+            var (fastApiPort, baileysPort) = PortHashCalculator.GetBothPorts(phone.Id, _configuration);
 
             if (!string.IsNullOrEmpty(phone.CredsBase64))
                 await RestoreCredsAsync(phone);
@@ -217,13 +217,13 @@ public class ContainerManager : IContainerManager
             await _supabaseService.LogAgentEventAsync(_currentHost.Id, AgentEventType.Started,
                 new { phoneId = phone.Id, containerId, fastApiPort, baileysPort, dockerUrl });
 
-            _logger.LogInformation("Container started for phone {PhoneNumber} FastAPI:{FastApi} Baileys:{Baileys}",
+            _logger.LogInformation("[CONTAINER] Container started for phone {PhoneNumber} FastAPI:{FastApi} Baileys:{Baileys}",
                 phone.Number, fastApiPort, baileysPort);
             return true;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error starting container for phone {PhoneNumber}", phone.Number);
+            _logger.LogError(ex, "[CONTAINER] Error starting container for phone {PhoneNumber}", phone.Number);
             await _supabaseService.UpdatePhoneDockerStatusAsync(phone.Id, PhoneDockerStatus.Error, errorMessage: ex.Message);
             return false;
         }
@@ -234,7 +234,7 @@ public class ContainerManager : IContainerManager
         try
         {
             var phoneIndex = phone.Number.Replace("+", "");
-            var authPath   = Path.Combine(_dockerSettings.DataBasePath, $"auth_{phoneIndex}");
+            var authPath = Path.Combine(_dockerSettings.DataBasePath, $"auth_{phone.Id}");
             Directory.CreateDirectory(authPath);
             var credsBytes = Convert.FromBase64String(phone.CredsBase64!);
             var credsPath  = Path.Combine(authPath, "creds.json");
@@ -310,27 +310,28 @@ public class ContainerManager : IContainerManager
             var res = await http.GetFromJsonAsync<ContainerStatusResponse>($"http://localhost:{baileysPort}/status");
             if (res?.Status == "connected")
             {
-                _logger.LogInformation("Container already connected, requesting creds resend for {PhoneId}", phoneId);
+                _logger.LogInformation("[CONTAINER] Container already connected, requesting creds resend for {PhoneId}", phoneId);
                 await http.PostAsync($"http://localhost:{baileysPort}/resend-auth", null);
             }
         }
-        catch (Exception ex) { _logger.LogWarning(ex, "Could not resend auth for phone {PhoneId}", phoneId); }
+        catch (Exception ex) { _logger.LogWarning(ex, "[CONTAINER] Could not resend auth for phone {PhoneId}", phoneId); }
     }
 
     public async Task<bool> StopPhoneContainerAsync(Phone phone)
     {
-        if (string.IsNullOrEmpty(phone.ContainerId)) { _logger.LogWarning("Phone {PhoneNumber} has no container ID", phone.Number); return false; }
+        if (string.IsNullOrEmpty(phone.ContainerId)) { _logger.LogWarning("[CONTAINER] Phone {PhoneNumber} has no container ID", phone.Number); return false; }
         try
         {
             var success = await _dockerService.StopContainerAsync(phone.ContainerId);
             if (success)
             {
                 await _supabaseService.UpdatePhoneDockerStatusAsync(phone.Id, PhoneDockerStatus.Stopped);
+                _logger.LogInformation("[CONTAINER] Logging agent event for stopped phone {PhoneId}", phone.Id);
                 await _supabaseService.LogAgentEventAsync(_currentHost?.Id, AgentEventType.Stopped, new { phoneId = phone.Id });
             }
             return success;
         }
-        catch (Exception ex) { _logger.LogError(ex, "Error stopping container for phone {PhoneNumber}", phone.Number); return false; }
+        catch (Exception ex) { _logger.LogError(ex, "[CONTAINER] Error stopping container for phone {PhoneNumber}", phone.Number); return false; }
     }
 
     public async Task<bool> RestartPhoneContainerAsync(Phone phone)
@@ -347,7 +348,7 @@ public class ContainerManager : IContainerManager
         await _syncLock.WaitAsync();
         try
         {
-            _logger.LogInformation("Syncing containers with database...");
+            _logger.LogInformation("[CONTAINER] Syncing containers with database...");
             var phones = await _supabaseService.GetPhonesForHostAsync(_currentHost.Id);
             var runningContainers   = await _dockerService.ListContainersAsync(all: true);
             var runningContainerIds = runningContainers.Where(c => c.State == "running").Select(c => c.ID).ToHashSet();
@@ -356,12 +357,12 @@ public class ContainerManager : IContainerManager
             {
                 if (phone.DockerStatus == PhoneDockerStatus.Running && !string.IsNullOrEmpty(phone.ContainerId) && !runningContainerIds.Contains(phone.ContainerId))
                 {
-                    _logger.LogWarning("Container for phone {PhoneNumber} is not running, restarting...", phone.Number);
+                    _logger.LogWarning("[CONTAINER] Container for phone {PhoneNumber} is not running, restarting...", phone.Number);
                     await RestartPhoneContainerAsync(phone);
                 }
                 else if (phone.DockerStatus == PhoneDockerStatus.Pending || phone.DockerStatus == PhoneDockerStatus.Unknown)
                 {
-                    _logger.LogInformation("Starting pending phone {PhoneNumber}", phone.Number);
+                    _logger.LogInformation("[CONTAINER] Starting pending phone {PhoneNumber}", phone.Number);
                     await StartPhoneContainerAsync(phone);
                 }
             }
@@ -370,13 +371,13 @@ public class ContainerManager : IContainerManager
             var currentCount   = phones.Count;
             foreach (var phone in orphanedPhones)
             {
-                if (currentCount >= _hostSettings.MaxContainers) { _logger.LogWarning("Host at capacity ({Max}), cannot claim more phones", _hostSettings.MaxContainers); break; }
-                _logger.LogInformation("Claiming orphaned phone {PhoneNumber}", phone.Number);
+                if (currentCount >= _hostSettings.MaxContainers) { _logger.LogWarning("[CONTAINER] Host at capacity ({Max}), cannot claim more phones", _hostSettings.MaxContainers); break; }
+                _logger.LogInformation("[CONTAINER] Claiming orphaned phone {PhoneNumber}", phone.Number);
                 await _supabaseService.AssignPhoneToHostAsync(phone.Id, _currentHost.Id);
                 await StartPhoneContainerAsync(phone);
                 currentCount++;
             }
-            _logger.LogInformation("Container sync completed. Managing {Count} phones", currentCount);
+            _logger.LogInformation("[CONTAINER] Container sync completed. Managing {Count} phones", currentCount);
         }
         finally { _syncLock.Release(); }
     }
@@ -393,7 +394,7 @@ public class ContainerManager : IContainerManager
                 var isHealthy = await _dockerService.CheckHealthAsync(phone.ContainerId, phone.ApiPort.Value);
                 if (!isHealthy)
                 {
-                    _logger.LogWarning("Phone {PhoneNumber} failed health check", phone.Number);
+                    _logger.LogWarning("[CONTAINER] Phone {PhoneNumber} failed health check", phone.Number);
                     await _supabaseService.LogAgentEventAsync(_currentHost.Id, AgentEventType.HealthCheckFailed, new { phoneId = phone.Id });
                     await RestartPhoneContainerAsync(phone);
                 }
@@ -403,7 +404,7 @@ public class ContainerManager : IContainerManager
                 }
             }
         }
-        catch (Exception ex) { _logger.LogError(ex, "Error during health check"); }
+        catch (Exception ex) { _logger.LogError(ex, "[CONTAINER] Error during health check"); }
     }
 
     public async Task TakeOverFromDeadHostAsync(Guid deadHostId)
@@ -411,7 +412,7 @@ public class ContainerManager : IContainerManager
         if (_currentHost == null) return;
         try
         {
-            _logger.LogWarning("Taking over phones from dead host {DeadHostId}", deadHostId);
+            _logger.LogWarning("[CONTAINER] Taking over phones from dead host {DeadHostId}", deadHostId);
             var phones       = await _supabaseService.GetPhonesForHostAsync(deadHostId);
             var currentCount = (await _supabaseService.GetPhonesForHostAsync(_currentHost.Id)).Count;
             var takenOver    = new List<Guid>();
@@ -429,29 +430,30 @@ public class ContainerManager : IContainerManager
                     if (started)
                     {
                         takenOver.Add(phone.Id);
+                        _logger.LogInformation("[CONTAINER] Taking over phone {PhoneNumber}", phone.Number);
                         await _supabaseService.LogAgentEventAsync(_currentHost.Id, AgentEventType.Migrated,
                             new { action = "takeover", phoneId = phone.Id, phoneNumber = phone.Number, fromHostId = deadHostId, toHostId = _currentHost.Id, hadCredentials = hasCredentials, timestamp = DateTime.UtcNow });
                         currentCount++;
                     }
                 }
-                catch (Exception phoneEx) { _logger.LogError(phoneEx, "Error taking over phone {PhoneNumber}", phone.Number); }
+                catch (Exception phoneEx) { _logger.LogError(phoneEx, "[CONTAINER] Error taking over phone {PhoneNumber}", phone.Number); }
             }
 
             await _supabaseService.SetHostStatusAsync(deadHostId, "inactive");
             await _supabaseService.LogAgentEventAsync(_currentHost.Id, AgentEventType.Migrated,
                 new { action = "takeover_summary", fromHostId = deadHostId, toHostId = _currentHost.Id, totalPhones = phones.Count, takenOver = takenOver.Count, skipped = skipped.Count, timestamp = DateTime.UtcNow });
 
-            _logger.LogInformation("Takeover complete: {TakenOver}/{Total} phones from host {DeadHostId}", takenOver.Count, phones.Count, deadHostId);
+            _logger.LogInformation("[CONTAINER] Takeover complete: {TakenOver}/{Total} phones from host {DeadHostId}", takenOver.Count, phones.Count, deadHostId);
         }
-        catch (Exception ex) { _logger.LogError(ex, "Error taking over from dead host {DeadHostId}", deadHostId); }
+        catch (Exception ex) { _logger.LogError(ex, "[CONTAINER] Error taking over from dead host {DeadHostId}", deadHostId); }
     }
 
     public async Task<bool> PausePhoneContainerAsync(Phone phone)
     {
-        if (_currentHost == null) { _logger.LogError("Host not initialized"); return false; }
+        if (_currentHost == null) { _logger.LogError("[CONTAINER] Host not initialized"); return false; }
         try
         {
-            _logger.LogInformation("Pausing phone {PhoneNumber}", phone.Number);
+            _logger.LogInformation("[CONTAINER] Pausing phone {PhoneNumber}", phone.Number);
             if (!string.IsNullOrEmpty(phone.ContainerId))
             {
                 await _dockerService.StopContainerAsync(phone.ContainerId);
@@ -459,9 +461,9 @@ public class ContainerManager : IContainerManager
             }
 
             var phoneIndex   = phone.Number.Replace("+", "");
-            var authPath     = Path.Combine(_dockerSettings.DataBasePath, $"auth_{phoneIndex}");
-            var logsPath     = Path.Combine(_dockerSettings.DataBasePath, $"logs_{phoneIndex}");
-            var contactsPath = Path.Combine(_dockerSettings.DataBasePath, $"contacts_{phoneIndex}");
+            var authPath     = Path.Combine(_dockerSettings.DataBasePath, $"auth_{phone.Id}");
+            var logsPath     = Path.Combine(_dockerSettings.DataBasePath, $"logs_{phone.Id}");
+            var contactsPath = Path.Combine(_dockerSettings.DataBasePath, $"contacts_{phone.Id}");
 
             if (Directory.Exists(authPath))     Directory.Delete(authPath, recursive: true);
             if (Directory.Exists(logsPath))     Directory.Delete(logsPath, recursive: true);
@@ -471,12 +473,12 @@ public class ContainerManager : IContainerManager
             await _supabaseService.DetachPhoneFromHostAsync(phone.Id);
             await _supabaseService.LogAgentEventAsync(_currentHost.Id, AgentEventType.Stopped, new { phoneId = phone.Id, action = "pause", phoneNumber = phone.Number });
 
-            _logger.LogInformation("Phone {PhoneNumber} paused and detached from host", phone.Number);
+            _logger.LogInformation("[CONTAINER] Phone {PhoneNumber} paused and detached from host", phone.Number);
             return true;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error pausing phone {PhoneNumber}", phone.Number);
+            _logger.LogError(ex, "[CONTAINER] Error pausing phone {PhoneNumber}", phone.Number);
             await _supabaseService.UpdatePhoneDockerStatusAsync(phone.Id, PhoneDockerStatus.Error, errorMessage: ex.Message);
             return false;
         }

@@ -6,64 +6,51 @@ namespace WhatsAppDockerManager.Services;
 /// <summary>
 /// מחשב ports דטרמיניסטיים לפי מספר טלפון + secret seed.
 /// כל קריאה עם אותו טלפון תחזיר תמיד אותו port — ללא DB.
-/// </summary>
+/// </summary
 public static class PortHashCalculator
 {
-    // ── Secrets (עבור מניעת התנגשות בין שירותים) ────────────
-    // בפרודקשן — קרא מ-environment variables
-    private const string FastApiSeed = "FASTAPI_PORT_SEED";   // env: PORT_SEED_FASTAPI
-    private const string BaileysSeed = "BAILEYS_PORT_SEED";   // env: PORT_SEED_BAILEYS
+    private const string FastApiSeed = "FASTAPI_PORT_SEED";
+    private const string BaileysSeed = "BAILEYS_PORT_SEED";
 
-    // ── טווחי פורטים ────────────────────────────────────────
-    // FastAPI: 8000–8999  (100 slots → עד 100 agents במקביל)
-    // Baileys: 9000–9999  (100 slots → תמיד gap של 1000 מ-FastAPI)
     private const int FastApiRangeStart = 8000;
     private const int FastApiRangeEnd   = 8999;
     private const int BaileysRangeStart = 9000;
     private const int BaileysRangeEnd   = 9999;
 
-    // ── Public API ───────────────────────────────────────────
-
-    /// <summary>Port של FastAPI (Python) עבור מספר הטלפון</summary>
-    public static int GetFastApiPort(string phoneNumber, IConfiguration? config = null)
+    // ← חדש: לפי GUID (ייחודי per user+phone)
+    public static int GetFastApiPort(Guid phoneId, IConfiguration? config = null)
     {
         var seed = config?["AppSettings:Ports:FastApiSeed"] ?? FastApiSeed;
-        return ComputePort(phoneNumber, seed, FastApiRangeStart, FastApiRangeEnd);
+        return ComputePort(phoneId.ToString("N"), seed, FastApiRangeStart, FastApiRangeEnd);
     }
 
-    /// <summary>Port של Baileys (Node.js) עבור מספר הטלפון</summary>
-    public static int GetBaileysPort(string phoneNumber, IConfiguration? config = null)
+    public static int GetBaileysPort(Guid phoneId, IConfiguration? config = null)
     {
         var seed = config?["AppSettings:Ports:BaileysSeed"] ?? BaileysSeed;
-        return ComputePort(phoneNumber, seed, BaileysRangeStart, BaileysRangeEnd);
+        return ComputePort(phoneId.ToString("N"), seed, BaileysRangeStart, BaileysRangeEnd);
     }
 
-    /// <summary>מחזיר את שני הפורטים ביחד</summary>
-    public static (int FastApi, int Baileys) GetBothPorts(string phoneNumber, IConfiguration? config = null)
-        => (GetFastApiPort(phoneNumber, config), GetBaileysPort(phoneNumber, config));
+    public static (int FastApi, int Baileys) GetBothPorts(Guid phoneId, IConfiguration? config = null)
+        => (GetFastApiPort(phoneId, config), GetBaileysPort(phoneId, config));
 
-    // ── Core hash logic ──────────────────────────────────────
+    // ── Overloads ישנים לתאימות לאחור ──────────────────────
+    public static int GetFastApiPort(string phoneNumber, IConfiguration? config = null)
+        => throw new InvalidOperationException(
+            "Use GetFastApiPort(Guid phoneId) — port must be unique per phone record, not per number");
 
-    private static int ComputePort(string phoneNumber, string seed, int rangeStart, int rangeEnd)
+    public static int GetBaileysPort(string phoneNumber, IConfiguration? config = null)
+        => throw new InvalidOperationException(
+            "Use GetBaileysPort(Guid phoneId) — port must be unique per phone record, not per number");
+
+    // ── Core ────────────────────────────────────────────────
+    private static int ComputePort(string input, string seed, int rangeStart, int rangeEnd)
     {
-        // נקה את הטלפון — רק ספרות
-        var normalized = NormalizePhone(phoneNumber);
-
-        // HMACSHA256(seed, phoneNumber) → דטרמיניסטי + קשה לנחש
         var keyBytes   = Encoding.UTF8.GetBytes(seed);
-        var inputBytes = Encoding.UTF8.GetBytes(normalized);
-
+        var inputBytes = Encoding.UTF8.GetBytes(input);
         using var hmac = new HMACSHA256(keyBytes);
-        var hash = hmac.ComputeHash(inputBytes);
-
-        // קח 4 בתים ראשונים → uint → modulo range
+        var hash      = hmac.ComputeHash(inputBytes);
         var hashUint  = BitConverter.ToUInt32(hash, 0);
         var rangeSize = (uint)(rangeEnd - rangeStart + 1);
-        var offset    = (int)(hashUint % rangeSize);
-
-        return rangeStart + offset;
+        return rangeStart + (int)(hashUint % rangeSize);
     }
-
-    private static string NormalizePhone(string phone)
-        => new string(phone.Where(char.IsDigit).ToArray());
 }

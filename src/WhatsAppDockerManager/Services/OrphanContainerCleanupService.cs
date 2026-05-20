@@ -47,7 +47,7 @@ public class OrphanContainerCleanupService
                 .ToHashSet();
 
             _logger.LogInformation(
-                "Local containers: {Local} | DB registered: {Db}",
+                "[ORPHAN] Local containers: {Local} | DB registered: {Db}",
                 localContainers.Count, dbContainerIds.Count);
 
             var basePath = _configuration["AppSettings:Docker:DataBasePath"] ?? "/opt/whatsapp-data";
@@ -57,7 +57,7 @@ public class OrphanContainerCleanupService
                 if (dbContainerIds.Contains(container.ID))
                     continue;
 
-                _logger.LogWarning("Orphan: {Name} ({Id}) — removing",
+                _logger.LogWarning("[ORPHAN] Orphan: {Name} ({Id}) — removing",
                     container.Names.FirstOrDefault(), container.ID);
 
                 await _dockerService.RemoveContainerAsync(container.ID);
@@ -71,17 +71,17 @@ public class OrphanContainerCleanupService
                         if (Directory.Exists(path))
                         {
                             Directory.Delete(path, recursive: true);
-                            _logger.LogInformation("Deleted: {Path}", path);
+                            _logger.LogInformation("[ORPHAN] Deleted: {Path}", path);
                         }
                     }
                 }
             }
 
-            _logger.LogInformation("Orphan cleanup complete.");
+            _logger.LogInformation("[ORPHAN] Orphan cleanup complete.");
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Orphan cleanup failed");
+            _logger.LogError(ex, "[ORPHAN] Orphan cleanup failed");
         }
     }
 } 
