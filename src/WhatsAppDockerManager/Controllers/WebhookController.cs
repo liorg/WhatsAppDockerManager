@@ -104,12 +104,19 @@ private static readonly ConcurrentDictionary<string, SemaphoreSlim>
         {
             // בדוק שוב — אולי ה-thread הקודם כבר סימן phone זה inactive
             var freshPhone = await _supabaseService.GetPhoneByIdAsync(phoneId);
-            if (freshPhone?.Status == "inactive") return;  // כבר הפסדנו
-
+            if (freshPhone?.Status == "inactive") 
+            {
+                _logger.LogWarning("[AUTH] Phone {PhoneId} is already marked inactive — skipping", phoneId);
+                return;  // כבר הפסדנו
+            }
             var others = await _supabaseService.GetPhonesByNumberAsync(number);
-            var oldPhone = others.FirstOrDefault(p => p.Id != phoneId && p.Status == "active");
+            
+            _logger.LogInformation("[AUTH] Found {Count} phones with number {Number} (including current)", 
+            others.Count, number);
+            ar oldPhone = others.FirstOrDefault(p => p.Id != phoneId && p.Status == "active");
             if (oldPhone != null)
             {
+                _logger.LogWarning("[AUTH] Found existing active phone {OldPhoneId} with same number {Number} — marking inactive", oldPhone.Id, number);
                 await _supabaseService.SetPhoneStatusAsync(oldPhone.Id, "inactive");
                 _logger.LogWarning("[AUTH] Takeover: {Old} → {New}", oldPhone.Id, phoneId);
             }
