@@ -185,7 +185,11 @@ public class ContainerManager : IContainerManager
 
             await _supabaseService.UpdatePhoneDockerStatusAsync(phone.Id, PhoneDockerStatus.Starting);
 
-            var (fastApiPort, baileysPort) = PortHashCalculator.GetBothPorts(phone.Id, _configuration);
+            var allPhones   = await _supabaseService.GetPhonesForHostAsync(_currentHost.Id);
+            var otherPhones = allPhones.Where(p => p.Id != phone.Id).ToList();
+            var usedFa      = otherPhones.Where(p => p.ApiPort.HasValue).Select(p => p.ApiPort!.Value);
+            var usedBa      = otherPhones.Where(p => p.WsPort.HasValue).Select(p => p.WsPort!.Value);
+            var (fastApiPort, baileysPort) = PortHashCalculator.GetBothPortsUnique(phone.Id, usedFa, usedBa, _configuration);
 
             if (!string.IsNullOrEmpty(phone.CredsBase64))
                 await RestoreCredsAsync(phone);
@@ -207,7 +211,7 @@ public class ContainerManager : IContainerManager
             await _supabaseService.UpdatePhoneDockerStatusAsync(
                 phone.Id, PhoneDockerStatus.Running,
                 containerId:   containerId,
-                containerName: $"whatsapp_{phone.Number.Replace("+", "")}",
+                containerName: PhonePathHelper.ContainerName(phone.Number, phone.Id),
                 apiPort:       fastApiPort,
                 dockerUrl:     dockerUrl);
 
@@ -234,7 +238,7 @@ public class ContainerManager : IContainerManager
         try
         {
             var phoneIndex = phone.Number.Replace("+", "");
-            var authPath = Path.Combine(_dockerSettings.DataBasePath, $"auth_{phone.Id}");
+            var authPath = PhonePathHelper.AuthPath(_dockerSettings.DataBasePath, phone.Id);
             Directory.CreateDirectory(authPath);
             var credsBytes = Convert.FromBase64String(phone.CredsBase64!);
             var credsPath  = Path.Combine(authPath, "creds.json");
@@ -487,14 +491,7 @@ public class ContainerManager : IContainerManager
                 await _dockerService.RemoveContainerAsync(phone.ContainerId);
             }
 
-            var phoneIndex   = phone.Number.Replace("+", "");
-            var authPath     = Path.Combine(_dockerSettings.DataBasePath, $"auth_{phone.Id}");
-            var logsPath     = Path.Combine(_dockerSettings.DataBasePath, $"logs_{phone.Id}");
-            var contactsPath = Path.Combine(_dockerSettings.DataBasePath, $"contacts_{phone.Id}");
-
-            if (Directory.Exists(authPath))     Directory.Delete(authPath, recursive: true);
-            if (Directory.Exists(logsPath))     Directory.Delete(logsPath, recursive: true);
-            if (Directory.Exists(contactsPath)) Directory.Delete(contactsPath, recursive: true);
+            PhonePathHelper.DeleteDirectories(_dockerSettings.DataBasePath, phone.Id);
 
             await _supabaseService.UpdatePhoneDockerStatusAsync(phone.Id, PhoneDockerStatus.Stopped, containerId: "", containerName: "", dockerUrl: "");
             await _supabaseService.DetachPhoneFromHostAsync(phone.Id);
