@@ -79,7 +79,7 @@ public interface ISupabaseService
     Task UpdateAuthSessionAsync(Guid phoneId, string authSessionId);
     Task SetPhoneRevisionAsync(Guid phoneId, int revision);
 
-    await _supabaseService.UpdatePhoneNumberAsync(phoneId, number);
+    Task _supabaseService.UpdatePhoneNumberAsync(phoneId, number);
 
 Task<int> IncrementPhoneRevisionAsync(Guid phoneId);
     
