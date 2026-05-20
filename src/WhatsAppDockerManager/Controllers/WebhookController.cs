@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using System.Collections.Concurrent;
 using System.Text.Json.Serialization;
 using WhatsAppDockerManager.Models;
 using WhatsAppDockerManager.Services;
@@ -68,7 +69,16 @@ public class WebhookController : ControllerBase
 
         return Ok(new { received = true });
     }
-
+private static readonly ConcurrentDictionary<string, SemaphoreSlim> 
+    _numberLocks = new();
+    /// <summary>
+    /// 
+    /// </summary>
+    /// <param name="phoneId"></param>
+    /// <param name="phone"></param>
+    /// <param name="payload"></param>
+    /// <returns></returns>
+    /// journalctl -u whatsapp-manager.service   -f --no-pager | grep "[AUTH]"
     private async Task HandleAuthenticated(Guid phoneId, Phone phone, ContainerEventPayload payload)
     {
         _logger.LogInformation("[AUTH] Phone {PhoneId} authenticated as {Phone}", phoneId, payload.Phone);
@@ -79,38 +89,32 @@ public class WebhookController : ControllerBase
             await _supabaseService.UpdatePhoneCredsAsync(phoneId, payload.CredsB64);
             _logger.LogInformation("[AUTH] ✓ Saved creds for phone {PhoneId}", phoneId);
         }
+        if (string.IsNullOrEmpty(payload.Phone)) return;
+  
+        var number = "+" + payload.Phone.Replace("+", "");
+        _logger.LogInformation("[AUTH] Authenticated phone number: {Number}", number);  
 
         // ── עדכן מספר ומצב ───────────────────────────────────────────────────
         await _supabaseService.UpdatePhoneDockerStatusAsync(phoneId, PhoneDockerStatus.Running);
 
-        if (!string.IsNullOrEmpty(payload.Phone))
+         // ── נעל לפי מספר — רק אחד עובד בכל פעם ────────────
+        var sem = _numberLocks.GetOrAdd(number, _ => new SemaphoreSlim(1, 1));
+        await sem.WaitAsync();
+        try
         {
-            var authenticatedNumber = "+" + payload.Phone.Replace("+", "");
-            await _supabaseService.UpdatePhoneNumberAsync(phoneId, authenticatedNumber);
+            // בדוק שוב — אולי ה-thread הקודם כבר סימן phone זה inactive
+            var freshPhone = await _supabaseService.GetPhoneByIdAsync(phoneId);
+            if (freshPhone?.Status == "inactive") return;  // כבר הפסדנו
 
-            // ── Takeover: בדוק האם יש phone אחר עם אותו מספר ────────────────
-            var allWithSameNumber = await _supabaseService.GetPhonesByNumberAsync(authenticatedNumber);
-            var oldPhone = allWithSameNumber.FirstOrDefault(p => p.Id != phoneId && p.Status == "active");
-
+            var others = await _supabaseService.GetPhonesByNumberAsync(number);
+            var oldPhone = others.FirstOrDefault(p => p.Id != phoneId && p.Status == "active");
             if (oldPhone != null)
             {
-                _logger.LogWarning(
-                    "[AUTH] ⚠ Takeover: number {Number} moving from {OldId} (user={OldUser}) → {NewId} (user={NewUser})",
-                    authenticatedNumber, oldPhone.Id, oldPhone.UserId, phoneId, phone.UserId);
-
-                // העבר user_id אם ה-phone החדש אין לו
-                if (phone.UserId == null && oldPhone.UserId != null)
-                {
-                    await _supabaseService.UpdatePhoneUserIdAsync(phoneId, oldPhone.UserId.Value);
-                    _logger.LogInformation("[AUTH] Transferred user_id {UserId} → new phone {PhoneId}",
-                        oldPhone.UserId, phoneId);
-                }
-
-                // סמן phone ישן כ-inactive — OrphanService יטפל בניקוי
                 await _supabaseService.SetPhoneStatusAsync(oldPhone.Id, "inactive");
-                _logger.LogInformation("[AUTH] Old phone {OldId} marked inactive", oldPhone.Id);
+                _logger.LogWarning("[AUTH] Takeover: {Old} → {New}", oldPhone.Id, phoneId);
             }
         }
+        finally { sem.Release(); }
     }
 
     private async Task HandleIncomingMessage(Guid phoneId, Phone phone, ContainerEventPayload payload)

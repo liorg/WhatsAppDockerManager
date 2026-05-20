@@ -191,6 +191,23 @@ public class ContainerManager : IContainerManager
             var usedBa      = otherPhones.Where(p => p.WsPort.HasValue).Select(p => p.WsPort!.Value);
             var (fastApiPort, baileysPort) = PortHashCalculator.GetBothPortsUnique(phone.Id, usedFa, usedBa, _configuration);
 
+            // ── עצור containers ישנים של אותו מספר ──────────────────────
+            // מונע concurrency: שני containers עם אותו מספר לא ירוצו במקביל
+            if (!string.IsNullOrEmpty(phone.Number))
+            {
+                var allPhonesSameNumber = await _supabaseService.GetPhonesByNumberAsync(phone.Number);
+                foreach (var oldPhone in allPhonesSameNumber.Where(p => p.Id != phone.Id && !string.IsNullOrEmpty(p.ContainerId)))
+                {
+                    _logger.LogWarning("[CONTAINER] Stopping existing container for same number {Number} (phone={OldId})",
+                        phone.Number, oldPhone.Id);
+                    await _dockerService.StopContainerAsync(oldPhone.ContainerId!);
+                    await _dockerService.RemoveContainerAsync(oldPhone.ContainerId!);
+                    await _supabaseService.UpdatePhoneDockerStatusAsync(oldPhone.Id, PhoneDockerStatus.Stopped,
+                        containerId: "", containerName: "", dockerUrl: "");
+                    await _supabaseService.SetPhoneStatusAsync(oldPhone.Id, "inactive");
+                }
+            }
+
             if (!string.IsNullOrEmpty(phone.CredsBase64))
                 await RestoreCredsAsync(phone);
 
@@ -419,25 +436,13 @@ public class ContainerManager : IContainerManager
         try
         {
             var phones = await _supabaseService.GetPhonesForHostAsync(_currentHost.Id);
-
-            // ── הסר containers של phones inactive (נלקחו ע"י משתמש אחר) ──
-            foreach (var phone in phones.Where(p => p.Status == "inactive"))
-            {
-                _logger.LogInformation("[HEALTH] Phone {PhoneId} is inactive — removing container", phone.Id);
-                if (!string.IsNullOrEmpty(phone.ContainerId))
-                    await _dockerService.RemoveContainerAsync(phone.ContainerId);
-                PhonePathHelper.DeleteDirectories(_dockerSettings.DataBasePath, phone.Id);
-                _logger.LogInformation("[HEALTH] ✓ Cleaned up inactive phone {PhoneId}", phone.Id);
-            }
-
-            // ── בדיקת בריאות לphones רצים ────────────────────────────
-            foreach (var phone in phones.Where(p => p.DockerStatus == PhoneDockerStatus.Running && p.Status != "inactive"))
+            foreach (var phone in phones.Where(p => p.DockerStatus == PhoneDockerStatus.Running))
             {
                 if (string.IsNullOrEmpty(phone.ContainerId) || !phone.ApiPort.HasValue) continue;
                 var isHealthy = await _dockerService.CheckHealthAsync(phone.ContainerId, phone.ApiPort.Value);
                 if (!isHealthy)
                 {
-                    _logger.LogWarning("[HEALTH] Phone {PhoneNumber} failed health check", phone.Number);
+                    _logger.LogWarning("[CONTAINER] Phone {PhoneNumber} failed health check", phone.Number);
                     await _supabaseService.LogAgentEventAsync(_currentHost.Id, AgentEventType.HealthCheckFailed, new { phoneId = phone.Id });
                     await RestartPhoneContainerAsync(phone);
                 }
