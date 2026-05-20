@@ -1229,7 +1229,7 @@ public class SupabaseService : ISupabaseService
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error setting phone {PhoneId} status to {Status}", phoneId, status);
+            _logger.LogError(ex, "[DB] Error setting phone {PhoneId} status to {Status}", phoneId, status);
         }
     }
 
@@ -1244,14 +1244,57 @@ public class SupabaseService : ISupabaseService
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error deleting phone {PhoneId}", phoneId);
+            _logger.LogError(ex, "[DB] Error deleting phone {PhoneId}", phoneId);
         }
     }
 
-    public async Task<List<Phone>> GetPhonesByNumberAsync(string phoneNumber)
+public async Task<List<Phone>> GetPhonesByNumberAsync(string phoneNumber)
+{
+    try
+    {
+        _logger.LogInformation("[DB] Getting phones by number {Number}", phoneNumber);
+
+        var clean = new string(phoneNumber.Where(char.IsDigit).ToArray());
+
+        var response = await _client
+            .From<Phone>()
+            .Filter("number",
+                Supabase.Postgrest.Constants.Operator.In,
+                new List<string> { clean, "+" + clean })
+            .Get();
+
+        // ← כאן
+        _logger.LogInformation(
+            "[DB] Found {Count} phones",
+            response.Models?.Count ?? 0);
+
+        foreach (var p in response.Models ?? [])
+        {
+            _logger.LogInformation(
+                "[DB] Match: {Id} {Number} {Status}",
+                p.Id,
+                p.Number,
+                p.Status);
+        }
+
+        return response.Models ?? new List<Phone>();
+    }
+    catch (Exception ex)
+    {
+        _logger.LogError(
+            ex,
+            "[DB] Error getting phones by number {Number}",
+            phoneNumber);
+
+        return new List<Phone>();
+    }
+}
+     public async Task<List<Phone>> GetPhonesByNumberAsyncx(string phoneNumber)
     {
         try
         {
+            _logger.LogInformation("[DB] Getting phones by number {Number}", phoneNumber);  
+
             var clean = new string(phoneNumber.Where(char.IsDigit).ToArray());
             var response = await _client.From<Phone>()
                 .Where(p => p.Number == clean || p.Number == "+" + clean)
@@ -1260,7 +1303,7 @@ public class SupabaseService : ISupabaseService
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error getting phones by number {Number}", phoneNumber);
+            _logger.LogError(ex, "[DB] Error getting phones by number {Number}", phoneNumber);
             return new List<Phone>();
         }
     }
