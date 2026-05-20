@@ -9,7 +9,6 @@ public interface IDockerService
 {
     Task<bool> PullImageAsync(string imageName);
     Task<string?> CreateAndStartContainerAsync(Phone phone, int fastApiPort, int baileysPort, int authRevision = 0);
-   
     Task<bool> StopContainerAsync(string containerId);
     Task<bool> RemoveContainerAsync(string containerId);
     Task<ContainerInspectResponse?> InspectContainerAsync(string containerId);
@@ -136,8 +135,7 @@ public class DockerService : IDockerService, IDisposable
         }
     }
 
-    public async Task<string?> CreateAndStartContainerAsync(Phone phone, int fastApiPort, int baileysPort, int authRevision = 0);
-   
+    public async Task<string?> CreateAndStartContainerAsync(Phone phone, int fastApiPort, int baileysPort, int authRevision = 0)
     {
         try
         {
