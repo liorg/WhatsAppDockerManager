@@ -70,36 +70,48 @@ public class WebhookController : ControllerBase
     }
 
     private async Task HandleAuthenticated(Guid phoneId, Phone phone, ContainerEventPayload payload)
-{
-    _logger.LogInformation("Phone {PhoneId} authenticated as {Phone}", phoneId, payload.Phone);
-
-    // ── וודא שה-phone number תואם ──────────────────────────────
-    // מונע שמירת creds של phone אחד על phone אחר
-    if (!string.IsNullOrEmpty(payload.Phone))
     {
-        var cleanPayloadPhone  = new string(payload.Phone.Where(char.IsDigit).ToArray());
-        var cleanPhoneNumber   = new string((phone.Number ?? "").Where(char.IsDigit).ToArray());
+        _logger.LogInformation("[AUTH] Phone {PhoneId} authenticated as {Phone}", phoneId, payload.Phone);
 
-        if (!cleanPhoneNumber.EndsWith(cleanPayloadPhone) && !cleanPayloadPhone.EndsWith(cleanPhoneNumber))
+        // ── שמור creds ב-phone הנוכחי ────────────────────────────────────────
+        if (!string.IsNullOrEmpty(payload.CredsB64))
         {
-            _logger.LogError(
-                "[WEBHOOK] ⛔ Phone mismatch! phoneId={PhoneId} registered={Registered} payload={Payload} — IGNORING creds",
-                phoneId, cleanPhoneNumber, cleanPayloadPhone);
-            return;
+            await _supabaseService.UpdatePhoneCredsAsync(phoneId, payload.CredsB64);
+            _logger.LogInformation("[AUTH] ✓ Saved creds for phone {PhoneId}", phoneId);
+        }
+
+        // ── עדכן מספר ומצב ───────────────────────────────────────────────────
+        await _supabaseService.UpdatePhoneDockerStatusAsync(phoneId, PhoneDockerStatus.Running);
+
+        if (!string.IsNullOrEmpty(payload.Phone))
+        {
+            var authenticatedNumber = "+" + payload.Phone.Replace("+", "");
+            await _supabaseService.UpdatePhoneNumberAsync(phoneId, authenticatedNumber);
+
+            // ── Takeover: בדוק האם יש phone אחר עם אותו מספר ────────────────
+            var allWithSameNumber = await _supabaseService.GetPhonesByNumberAsync(authenticatedNumber);
+            var oldPhone = allWithSameNumber.FirstOrDefault(p => p.Id != phoneId && p.Status == "active");
+
+            if (oldPhone != null)
+            {
+                _logger.LogWarning(
+                    "[AUTH] ⚠ Takeover: number {Number} moving from {OldId} (user={OldUser}) → {NewId} (user={NewUser})",
+                    authenticatedNumber, oldPhone.Id, oldPhone.UserId, phoneId, phone.UserId);
+
+                // העבר user_id אם ה-phone החדש אין לו
+                if (phone.UserId == null && oldPhone.UserId != null)
+                {
+                    await _supabaseService.UpdatePhoneUserIdAsync(phoneId, oldPhone.UserId.Value);
+                    _logger.LogInformation("[AUTH] Transferred user_id {UserId} → new phone {PhoneId}",
+                        oldPhone.UserId, phoneId);
+                }
+
+                // סמן phone ישן כ-inactive — OrphanService יטפל בניקוי
+                await _supabaseService.SetPhoneStatusAsync(oldPhone.Id, "inactive");
+                _logger.LogInformation("[AUTH] Old phone {OldId} marked inactive", oldPhone.Id);
+            }
         }
     }
-
-    await _supabaseService.UpdatePhoneDockerStatusAsync(phoneId, PhoneDockerStatus.Running);
-
-    if (!string.IsNullOrEmpty(payload.Phone))
-        await _supabaseService.UpdatePhoneNumberAsync(phoneId, "+" + payload.Phone.Replace("+", ""));
-
-    if (!string.IsNullOrEmpty(payload.CredsB64))
-    {
-        await _supabaseService.UpdatePhoneCredsAsync(phoneId, payload.CredsB64);
-        _logger.LogInformation("[WEBHOOK] ✓ Saved creds for phone {PhoneId}", phoneId);
-    }
-}
 
     private async Task HandleIncomingMessage(Guid phoneId, Phone phone, ContainerEventPayload payload)
     {
