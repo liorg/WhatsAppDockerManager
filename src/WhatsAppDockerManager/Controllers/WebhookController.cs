@@ -89,7 +89,6 @@ private async Task HandleAuthenticated(Guid phoneId, Phone phone, ContainerEvent
     var number = "+" + payload.Phone.Replace("+", "");
     _logger.LogInformation("[AUTH] Authenticated phone number: {Number}", number);
 
-    // ── שמור creds תמיד ──────────────────────────────────────────────
     if (!string.IsNullOrEmpty(payload.CredsB64))
     {
         var hash = Convert.ToHexString(
@@ -113,7 +112,7 @@ private async Task HandleAuthenticated(Guid phoneId, Phone phone, ContainerEvent
         var freshPhone = await _supabaseService.GetPhoneByIdAsync(phoneId);
         if (freshPhone == null) return;
 
-        // ── בדוק revision — רק הגבוה ביותר מנצח ──────────────────────
+        // ── revision שנכתב ב-StartPhoneContainerAsync — רק משווים ────
         if (payload.AuthRevision.HasValue &&
             payload.AuthRevision.Value < freshPhone.AuthRevision)
         {
@@ -127,28 +126,18 @@ private async Task HandleAuthenticated(Guid phoneId, Phone phone, ContainerEvent
         await _supabaseService.UpdatePhoneDockerStatusAsync(phoneId, PhoneDockerStatus.Running);
         await _supabaseService.UpdatePhoneNumberAsync(phoneId, number);
 
-        // ── עדכן revision ב-DB ────────────────────────────────────────
-        if (payload.AuthRevision.HasValue)
-        {
-            await _supabaseService.SetPhoneRevisionAsync(phoneId, payload.AuthRevision.Value);
-            _logger.LogInformation("[AUTH] Revision updated → {Rev}", payload.AuthRevision.Value);
-        }
-
-        // ── השבת phones אחרים עם אותו מספר ───────────────────────────
         var others = await _supabaseService.GetPhonesByNumberAsync(number);
         foreach (var oldPhone in others.Where(p => p.Id != phoneId && p.Status == "active"))
         {
-            _logger.LogWarning(
-                "[AUTH] Takeover: {OldId} → {NewId} (rev={Rev})",
+            _logger.LogWarning("[AUTH] Takeover: {OldId} → {NewId} (rev={Rev})",
                 oldPhone.Id, phoneId, freshPhone.AuthRevision);
 
             await _supabaseService.SetPhoneStatusAsync(oldPhone.Id, "inactive");
             await _supabaseService.UpdatePhoneDockerStatusAsync(oldPhone.Id, PhoneDockerStatus.Stopped);
         }
 
-        _logger.LogInformation(
-            "[AUTH] ✓ Phone {PhoneId} active | number={Number} rev={Rev}",
-            phoneId, number, payload.AuthRevision ?? 0);
+        _logger.LogInformation("[AUTH] ✓ Phone {PhoneId} active | number={Number} rev={Rev}",
+            phoneId, number, freshPhone.AuthRevision);
     }
     finally
     {
