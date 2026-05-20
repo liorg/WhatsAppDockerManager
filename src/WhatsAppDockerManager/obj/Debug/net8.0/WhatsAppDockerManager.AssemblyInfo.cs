@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("WhatsAppDockerManager")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.162.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.162+fcc2ec407c668620f430272d70e94b4e538c0037")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.162+2d51f75941ccfd98dee3c37ef637da99def18fcb")]
 [assembly: System.Reflection.AssemblyProductAttribute("WhatsAppDockerManager")]
 [assembly: System.Reflection.AssemblyTitleAttribute("WhatsAppDockerManager")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.162.0")]

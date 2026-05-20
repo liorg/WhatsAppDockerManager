@@ -86,8 +86,21 @@ private static readonly ConcurrentDictionary<string, SemaphoreSlim>
         // ── שמור creds ב-phone הנוכחי ────────────────────────────────────────
         if (!string.IsNullOrEmpty(payload.CredsB64))
         {
+
+               var hash = Convert.ToHexString(
+                    System.Security.Cryptography.SHA256.HashData(
+                        System.Text.Encoding.UTF8.GetBytes(payload.CredsB64)
+                    )
+                )[..12];
+
+                _logger.LogInformation(
+                    "[AUTH] Got creds from container. PhoneId={PhoneId}, Len={Len}, Hash={Hash}",
+                    phoneId,
+                    payload.CredsB64.Length,
+                    hash);
             await _supabaseService.UpdatePhoneCredsAsync(phoneId, payload.CredsB64);
             _logger.LogInformation("[AUTH] ✓ Saved creds for phone {PhoneId}", phoneId);
+            
         }
         if (string.IsNullOrEmpty(payload.Phone)) return;
   
