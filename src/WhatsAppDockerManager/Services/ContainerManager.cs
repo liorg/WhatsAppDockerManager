@@ -267,7 +267,8 @@ public class ContainerManager : IContainerManager
                     {
                         foreach (var wh in listJson.Webhooks)
                         {
-                            if (wh.Contains("container-event"))
+                            //if (wh.Contains("container-event"))
+                            if (wh.Contains("container-event") && !wh.Contains(phoneId.ToString()))  // מחק רק זרים
                             {
                                 try
                                 {
