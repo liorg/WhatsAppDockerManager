@@ -369,19 +369,15 @@ private static readonly ConcurrentDictionary<string, SemaphoreSlim>
 
 public class ContainerEventPayload
 {
-    [JsonPropertyName("event")]     public string? Event     { get; set; }
-    [JsonPropertyName("messageId")] public string? MessageId { get; set; }
-    [JsonPropertyName("jid")]       public string? Jid       { get; set; }
-    [JsonPropertyName("type")]      public string? Type      { get; set; }
-    [JsonPropertyName("data")]      public Dictionary<string, object>? Data { get; set; }
-    [JsonPropertyName("timestamp")] public object? Timestamp { get; set; }
-    [JsonPropertyName("phone")]     public string? Phone     { get; set; }
-    [JsonPropertyName("name")]      public string? Name      { get; set; }
-    [JsonPropertyName("creds_b64")] public string? CredsB64  { get; set; }
-
-      [JsonPropertyName("authSessionId")]
-    public string? AuthSessionId { get; set; }
-
-    [JsonPropertyName("phoneId")]
-    public Guid? PayloadPhoneId { get; set; }
+    [JsonPropertyName("event")]        public string? Event        { get; set; }
+    [JsonPropertyName("messageId")]    public string? MessageId    { get; set; }
+    [JsonPropertyName("jid")]          public string? Jid          { get; set; }
+    [JsonPropertyName("type")]         public string? Type         { get; set; }
+    [JsonPropertyName("data")]         public Dictionary<string, object>? Data { get; set; }
+    [JsonPropertyName("timestamp")]    public object? Timestamp    { get; set; }
+    [JsonPropertyName("phone")]        public string? Phone        { get; set; }
+    [JsonPropertyName("name")]         public string? Name         { get; set; }
+    [JsonPropertyName("creds_b64")]    public string? CredsB64     { get; set; }
+    [JsonPropertyName("authRevision")] public int?    AuthRevision { get; set; }  // ← החלף
+    [JsonPropertyName("phoneId")]      public Guid?   PayloadPhoneId { get; set; }
 }
