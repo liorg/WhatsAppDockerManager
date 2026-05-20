@@ -72,6 +72,9 @@ public interface ISupabaseService
     Task UpdatePingSenderAsync(PingSender pingSender);
 
     Task ClearPhoneCredsAsync(Guid phoneId);
+    Task SetPhoneStatusAsync(Guid phoneId, string status);
+    Task DeletePhoneAsync(Guid phoneId);
+    Task<List<Phone>> GetPhonesByNumberAsync(string phoneNumber);
 }
 
 public class SupabaseService : ISupabaseService
@@ -1213,4 +1216,52 @@ public class SupabaseService : ISupabaseService
     }
 
     #endregion
+
+    public async Task SetPhoneStatusAsync(Guid phoneId, string status)
+    {
+        try
+        {
+            await _client.From<Phone>()
+                .Where(p => p.Id == phoneId)
+                .Set(p => p.Status, status)
+                .Update();
+            _logger.LogInformation("[DB] Phone {PhoneId} status → {Status}", phoneId, status);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error setting phone {PhoneId} status to {Status}", phoneId, status);
+        }
+    }
+
+    public async Task DeletePhoneAsync(Guid phoneId)
+    {
+        try
+        {
+            await _client.From<Phone>()
+                .Where(p => p.Id == phoneId)
+                .Delete();
+            _logger.LogInformation("[DB] Phone {PhoneId} deleted", phoneId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error deleting phone {PhoneId}", phoneId);
+        }
+    }
+
+    public async Task<List<Phone>> GetPhonesByNumberAsync(string phoneNumber)
+    {
+        try
+        {
+            var clean = new string(phoneNumber.Where(char.IsDigit).ToArray());
+            var response = await _client.From<Phone>()
+                .Where(p => p.Number == clean || p.Number == "+" + clean)
+                .Get();
+            return response.Models ?? new List<Phone>();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error getting phones by number {Number}", phoneNumber);
+            return new List<Phone>();
+        }
+    }
 }

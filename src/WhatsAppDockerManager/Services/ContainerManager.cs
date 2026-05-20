@@ -419,13 +419,25 @@ public class ContainerManager : IContainerManager
         try
         {
             var phones = await _supabaseService.GetPhonesForHostAsync(_currentHost.Id);
-            foreach (var phone in phones.Where(p => p.DockerStatus == PhoneDockerStatus.Running))
+
+            // ── הסר containers של phones inactive (נלקחו ע"י משתמש אחר) ──
+            foreach (var phone in phones.Where(p => p.Status == "inactive"))
+            {
+                _logger.LogInformation("[HEALTH] Phone {PhoneId} is inactive — removing container", phone.Id);
+                if (!string.IsNullOrEmpty(phone.ContainerId))
+                    await _dockerService.RemoveContainerAsync(phone.ContainerId);
+                PhonePathHelper.DeleteDirectories(_dockerSettings.DataBasePath, phone.Id);
+                _logger.LogInformation("[HEALTH] ✓ Cleaned up inactive phone {PhoneId}", phone.Id);
+            }
+
+            // ── בדיקת בריאות לphones רצים ────────────────────────────
+            foreach (var phone in phones.Where(p => p.DockerStatus == PhoneDockerStatus.Running && p.Status != "inactive"))
             {
                 if (string.IsNullOrEmpty(phone.ContainerId) || !phone.ApiPort.HasValue) continue;
                 var isHealthy = await _dockerService.CheckHealthAsync(phone.ContainerId, phone.ApiPort.Value);
                 if (!isHealthy)
                 {
-                    _logger.LogWarning("[CONTAINER] Phone {PhoneNumber} failed health check", phone.Number);
+                    _logger.LogWarning("[HEALTH] Phone {PhoneNumber} failed health check", phone.Number);
                     await _supabaseService.LogAgentEventAsync(_currentHost.Id, AgentEventType.HealthCheckFailed, new { phoneId = phone.Id });
                     await RestartPhoneContainerAsync(phone);
                 }
