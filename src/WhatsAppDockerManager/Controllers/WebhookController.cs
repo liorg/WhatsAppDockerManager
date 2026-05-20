@@ -79,7 +79,7 @@ private static readonly ConcurrentDictionary<string, SemaphoreSlim>
     /// <param name="payload"></param>
     /// <returns></returns>
     /// journalctl -u whatsapp-manager.service   -f --no-pager | grep "[AUTH]"
-private async Task HandleAuthenticated(Guid phoneId, Phone phone, ContainerEventPayload payload)
+   private async Task HandleAuthenticated(Guid phoneId, Phone phone, ContainerEventPayload payload)
 {
     _logger.LogInformation("[AUTH] Phone {PhoneId} authenticated as {Phone}", phoneId, payload.Phone);
 
@@ -89,7 +89,7 @@ private async Task HandleAuthenticated(Guid phoneId, Phone phone, ContainerEvent
     var number = "+" + payload.Phone.Replace("+", "");
     _logger.LogInformation("[AUTH] Authenticated phone number: {Number}", number);
 
-    // creds נשמר תמיד לפי ה-phoneId ששלח webhook
+    // ── שמור creds תמיד ──────────────────────────────────────────────
     if (!string.IsNullOrEmpty(payload.CredsB64))
     {
         var hash = Convert.ToHexString(
@@ -99,10 +99,8 @@ private async Task HandleAuthenticated(Guid phoneId, Phone phone, ContainerEvent
         )[..12];
 
         _logger.LogInformation(
-            "[AUTH] Got creds from container. PhoneId={PhoneId}, Len={Len}, Hash={Hash}",
-            phoneId,
-            payload.CredsB64.Length,
-            hash);
+            "[AUTH] Got creds. PhoneId={PhoneId}, Len={Len}, Hash={Hash}",
+            phoneId, payload.CredsB64.Length, hash);
 
         await _supabaseService.UpdatePhoneCredsAsync(phoneId, payload.CredsB64);
     }
@@ -113,35 +111,37 @@ private async Task HandleAuthenticated(Guid phoneId, Phone phone, ContainerEvent
     try
     {
         var freshPhone = await _supabaseService.GetPhoneByIdAsync(phoneId);
+        if (freshPhone == null) return;
 
-        if (freshPhone?.AuthSessionId != payload.AuthSessionId)
+        // ── בדוק revision — רק הגבוה ביותר מנצח ──────────────────────
+        if (payload.AuthRevision.HasValue &&
+            payload.AuthRevision.Value < freshPhone.AuthRevision)
         {
             _logger.LogWarning(
-                "[AUTH] Saved creds, but stale session. Not changing status. PhoneId={PhoneId}, PayloadSession={PayloadSession}, DbSession={DbSession}",
-                phoneId,
-                payload.AuthSessionId,
-                freshPhone?.AuthSessionId);
-
+                "[AUTH] Stale revision — ignoring. PhoneId={PhoneId} PayloadRev={PR} DbRev={DR}",
+                phoneId, payload.AuthRevision.Value, freshPhone.AuthRevision);
             return;
         }
 
         await _supabaseService.SetPhoneStatusAsync(phoneId, "active");
         await _supabaseService.UpdatePhoneDockerStatusAsync(phoneId, PhoneDockerStatus.Running);
+        await _supabaseService.UpdatePhoneNumberAsync(phoneId, number);
 
+        // ── השבת phones אחרים עם אותו מספר ───────────────────────────
         var others = await _supabaseService.GetPhonesByNumberAsync(number);
-
         foreach (var oldPhone in others.Where(p => p.Id != phoneId && p.Status == "active"))
         {
             _logger.LogWarning(
-                "[AUTH] Takeover by valid session: {OldPhoneId} → {NewPhoneId}",
-                oldPhone.Id,
-                phoneId);
+                "[AUTH] Takeover: {OldId} → {NewId} (rev={Rev})",
+                oldPhone.Id, phoneId, freshPhone.AuthRevision);
 
             await _supabaseService.SetPhoneStatusAsync(oldPhone.Id, "inactive");
             await _supabaseService.UpdatePhoneDockerStatusAsync(oldPhone.Id, PhoneDockerStatus.Stopped);
         }
 
-        _logger.LogInformation("[AUTH] ✓ Valid session. Phone {PhoneId} is active", phoneId);
+        _logger.LogInformation(
+            "[AUTH] ✓ Phone {PhoneId} active | number={Number} rev={Rev}",
+            phoneId, number, freshPhone.AuthRevision);
     }
     finally
     {
