@@ -155,6 +155,7 @@ public class PhonesController : ControllerBase
         }
 
         // ── 4. Check if container already running ───────────────────
+
         bool containerRunning = false;
         try
         {
@@ -172,8 +173,19 @@ public class PhonesController : ControllerBase
         // ── 5. Start container if needed ────────────────────────────
         if (!containerRunning)
         {
+            // ── phone חדש → QR נקי (לא נוגע ב-phone של משתמש אחר) ──
+            if (isNew)
+            {
+                _logger.LogInformation("[PROVISION] New phone — clearing own creds for fresh QR | phoneId={PhoneId}", phone.Id);
+                var basePath = _configuration["AppSettings:Docker:DataBasePath"] ?? "/opt/whatsapp-data";
+                PhonePathHelper.DeleteDirectories(basePath, phone.Id);
+                phone.CredsBase64 = null;
+                await _supabaseService.ClearPhoneCredsAsync(phone.Id);
+            }
+
             _logger.LogInformation("[PROVISION] Starting container | phoneId={PhoneId} isNew={IsNew}",
                 phone.Id, isNew);
+
             bool started;
             try
             {

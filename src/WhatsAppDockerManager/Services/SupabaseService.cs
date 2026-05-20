@@ -70,6 +70,8 @@ public interface ISupabaseService
     Task<(Phone phone, bool created)> GetOrCreatePhoneAsync(string phoneNumber, Guid userId, string? nickname = null);
     Task<PingSender?> GetPingSenderByMessageIdAsync(Guid phoneId, string pingMessageId);
     Task UpdatePingSenderAsync(PingSender pingSender);
+
+    Task ClearPhoneCredsAsync(Guid phoneId);
 }
 
 public class SupabaseService : ISupabaseService
@@ -271,6 +273,25 @@ public class SupabaseService : ISupabaseService
     #endregion
 
     #region Phone Operations
+
+    public async Task ClearPhoneCredsAsync(Guid phoneId)
+{
+    try
+    {
+        await _client.From<Phone>()
+            .Where(p => p.Id == phoneId)
+            .Set(p => p.CredsBase64, (string?)null)
+            .Set(p => p.DockerStatus, PhoneDockerStatus.Pending)
+            .Set(p => p.ErrorMessage, (string?)null)
+            .Update();
+
+        _logger.LogInformation("[PROVISION] Cleared creds for phone {PhoneId}", phoneId);
+    }
+    catch (Exception ex)
+    {
+        _logger.LogError(ex, "Error clearing creds for phone {PhoneId}", phoneId);
+    }
+}
 
     public async Task<PingSender?> GetPingSenderByMessageIdAsync(Guid phoneId, string pingMessageId)
     {

@@ -2,7 +2,9 @@ using WhatsAppDockerManager.Services;
 using WhatsAppDockerManager.Models;
 
 namespace WhatsAppDockerManager.Services;
-
+/// <summary>
+/// journalctl -u whatsapp-manager.service -f --no-pager | grep -E "ORPHAN|Duplicate|Error|error|Exception"
+/// </summary>
 public class OrphanContainerCleanupService
 {
     private readonly IDockerService _dockerService;
