@@ -79,7 +79,7 @@ private static readonly ConcurrentDictionary<string, SemaphoreSlim>
     /// <param name="payload"></param>
     /// <returns></returns>
     /// journalctl -u whatsapp-manager.service   -f --no-pager | grep "[AUTH]"
-   private async Task HandleAuthenticated(Guid phoneId, Phone phone, ContainerEventPayload payload)
+private async Task HandleAuthenticated(Guid phoneId, Phone phone, ContainerEventPayload payload)
 {
     _logger.LogInformation("[AUTH] Phone {PhoneId} authenticated as {Phone}", phoneId, payload.Phone);
 
@@ -127,6 +127,13 @@ private static readonly ConcurrentDictionary<string, SemaphoreSlim>
         await _supabaseService.UpdatePhoneDockerStatusAsync(phoneId, PhoneDockerStatus.Running);
         await _supabaseService.UpdatePhoneNumberAsync(phoneId, number);
 
+        // ── עדכן revision ב-DB ────────────────────────────────────────
+        if (payload.AuthRevision.HasValue)
+        {
+            await _supabaseService.SetPhoneRevisionAsync(phoneId, payload.AuthRevision.Value);
+            _logger.LogInformation("[AUTH] Revision updated → {Rev}", payload.AuthRevision.Value);
+        }
+
         // ── השבת phones אחרים עם אותו מספר ───────────────────────────
         var others = await _supabaseService.GetPhonesByNumberAsync(number);
         foreach (var oldPhone in others.Where(p => p.Id != phoneId && p.Status == "active"))
@@ -141,7 +148,7 @@ private static readonly ConcurrentDictionary<string, SemaphoreSlim>
 
         _logger.LogInformation(
             "[AUTH] ✓ Phone {PhoneId} active | number={Number} rev={Rev}",
-            phoneId, number, freshPhone.AuthRevision);
+            phoneId, number, payload.AuthRevision ?? 0);
     }
     finally
     {
