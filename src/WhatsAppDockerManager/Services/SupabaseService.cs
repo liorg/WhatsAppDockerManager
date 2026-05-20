@@ -78,6 +78,8 @@ public interface ISupabaseService
 
     Task UpdateAuthSessionAsync(Guid phoneId, string authSessionId);
 
+    await _supabaseService.UpdatePhoneNumberAsync(phoneId, number);
+
 Task<int> IncrementPhoneRevisionAsync(Guid phoneId);
     
 }
@@ -111,7 +113,15 @@ public class SupabaseService : ISupabaseService
     }
 
     #region Host Operations
-
+    
+public async Task SetPhoneRevisionAsync(Guid phoneId, int revision)
+{
+    var phone = await GetPhoneByIdAsync(phoneId);
+    if (phone == null) return;
+    phone.AuthRevision = revision;
+    await _client.From<Phone>().Update(phone);
+    _logger.LogInformation("[AUTH] Phone {PhoneId} AuthRevision → {Rev}", phoneId, revision);
+} 
 public async Task<int> IncrementPhoneRevisionAsync(Guid phoneId)
 {
     var phone = await GetPhoneByIdAsync(phoneId);
