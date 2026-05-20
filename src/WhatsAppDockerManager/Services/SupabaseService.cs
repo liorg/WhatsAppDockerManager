@@ -77,6 +77,7 @@ public interface ISupabaseService
     Task<List<Phone>> GetPhonesByNumberAsync(string phoneNumber);
 
     Task UpdateAuthSessionAsync(Guid phoneId, string authSessionId);
+    Task SetPhoneRevisionAsync(Guid phoneId, int revision);
 
     await _supabaseService.UpdatePhoneNumberAsync(phoneId, number);
 
