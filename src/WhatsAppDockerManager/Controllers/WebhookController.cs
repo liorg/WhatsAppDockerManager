@@ -111,9 +111,8 @@ private static readonly ConcurrentDictionary<string, SemaphoreSlim>
             }
             var others = await _supabaseService.GetPhonesByNumberAsync(number);
             
-            _logger.LogInformation("[AUTH] Found {Count} phones with number {Number} (including current)", 
-            others.Count, number);
-            ar oldPhone = others.FirstOrDefault(p => p.Id != phoneId && p.Status == "active");
+            _logger.LogInformation("[AUTH] Found {Count} phones with number {Number} (including current)", others.Count, number);
+            var oldPhone = others.FirstOrDefault(p => p.Id != phoneId && p.Status == "active");
             if (oldPhone != null)
             {
                 _logger.LogWarning("[AUTH] Found existing active phone {OldPhoneId} with same number {Number} — marking inactive", oldPhone.Id, number);
