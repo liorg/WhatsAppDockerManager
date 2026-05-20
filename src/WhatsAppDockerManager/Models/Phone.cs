@@ -12,6 +12,9 @@ public class Phone : BaseModel
     [Column("user_id")]
     public Guid? UserId { get; set; }
 
+[Column("auth_revision")]
+public int AuthRevision { get; set; } = 0;
+
     [Column("number")]
     public string Number { get; set; } = string.Empty;
 
