@@ -79,62 +79,91 @@ private static readonly ConcurrentDictionary<string, SemaphoreSlim>
     /// <param name="payload"></param>
     /// <returns></returns>
     /// journalctl -u whatsapp-manager.service   -f --no-pager | grep "[AUTH]"
-    private async Task HandleAuthenticated(Guid phoneId, Phone phone, ContainerEventPayload payload)
-    {
-        _logger.LogInformation("[AUTH] Phone {PhoneId} authenticated as {Phone}", phoneId, payload.Phone);
+  private async Task HandleAuthenticated(Guid phoneId, Phone phone, ContainerEventPayload payload)
+{
+    _logger.LogInformation("[AUTH] Phone {PhoneId} authenticated as {Phone}", phoneId, payload.Phone);
 
-        // ── שמור creds ב-phone הנוכחי ────────────────────────────────────────
+    if (string.IsNullOrEmpty(payload.Phone))
+        return;
+
+    var number = "+" + payload.Phone.Replace("+", "");
+    _logger.LogInformation("[AUTH] Authenticated phone number: {Number}", number);
+
+    await _supabaseService.UpdatePhoneDockerStatusAsync(phoneId, PhoneDockerStatus.Running);
+
+    var sem = _numberLocks.GetOrAdd(number, _ => new SemaphoreSlim(1, 1));
+    await sem.WaitAsync();
+
+    try
+    {
+        var others = await _supabaseService.GetPhonesByNumberAsync(number);
+
+        _logger.LogInformation(
+            "[AUTH] Found {Count} phones with number {Number}",
+            others.Count,
+            number);
+
+        var winner = others
+            .Where(p => p.Status == "active")
+            .OrderByDescending(p => p.CreatedAt)
+            .FirstOrDefault();
+
+        if (winner == null)
+        {
+            _logger.LogWarning("[AUTH] No active winner found. Marking current phone active {PhoneId}", phoneId);
+            await _supabaseService.SetPhoneStatusAsync(phoneId, "active");
+            winner = await _supabaseService.GetPhoneByIdAsync(phoneId);
+        }
+
+        if (winner == null || winner.Id != phoneId)
+        {
+            _logger.LogWarning(
+                "[AUTH] Phone {PhoneId} lost takeover. Winner={WinnerId}. Marking current inactive",
+                phoneId,
+                winner?.Id);
+
+            await _supabaseService.SetPhoneStatusAsync(phoneId, "inactive");
+            return;
+        }
+
+        var losers = others
+            .Where(p => p.Id != phoneId && p.Status == "active")
+            .ToList();
+
+        foreach (var loser in losers)
+        {
+            _logger.LogWarning(
+                "[AUTH] Takeover: marking old phone inactive {OldPhoneId} → {NewPhoneId}",
+                loser.Id,
+                phoneId);
+
+            await _supabaseService.SetPhoneStatusAsync(loser.Id, "inactive");
+        }
+
         if (!string.IsNullOrEmpty(payload.CredsB64))
         {
+            var hash = Convert.ToHexString(
+                System.Security.Cryptography.SHA256.HashData(
+                    System.Text.Encoding.UTF8.GetBytes(payload.CredsB64)
+                )
+            )[..12];
 
-               var hash = Convert.ToHexString(
-                    System.Security.Cryptography.SHA256.HashData(
-                        System.Text.Encoding.UTF8.GetBytes(payload.CredsB64)
-                    )
-                )[..12];
+            _logger.LogInformation(
+                "[AUTH] Got creds from winner container. PhoneId={PhoneId}, Len={Len}, Hash={Hash}",
+                phoneId,
+                payload.CredsB64.Length,
+                hash);
 
-                _logger.LogInformation(
-                    "[AUTH] Got creds from container. PhoneId={PhoneId}, Len={Len}, Hash={Hash}",
-                    phoneId,
-                    payload.CredsB64.Length,
-                    hash);
             await _supabaseService.UpdatePhoneCredsAsync(phoneId, payload.CredsB64);
-            _logger.LogInformation("[AUTH] ✓ Saved creds for phone {PhoneId}", phoneId);
-            
-        }
-        if (string.IsNullOrEmpty(payload.Phone)) return;
-  
-        var number = "+" + payload.Phone.Replace("+", "");
-        _logger.LogInformation("[AUTH] Authenticated phone number: {Number}", number);  
 
-        // ── עדכן מספר ומצב ───────────────────────────────────────────────────
-        await _supabaseService.UpdatePhoneDockerStatusAsync(phoneId, PhoneDockerStatus.Running);
-
-         // ── נעל לפי מספר — רק אחד עובד בכל פעם ────────────
-        var sem = _numberLocks.GetOrAdd(number, _ => new SemaphoreSlim(1, 1));
-        await sem.WaitAsync();
-        try
-        {
-            // בדוק שוב — אולי ה-thread הקודם כבר סימן phone זה inactive
-            var freshPhone = await _supabaseService.GetPhoneByIdAsync(phoneId);
-            if (freshPhone?.Status == "inactive") 
-            {
-                _logger.LogWarning("[AUTH] Phone {PhoneId} is already marked inactive — skipping", phoneId);
-                return;  // כבר הפסדנו
-            }
-            var others = await _supabaseService.GetPhonesByNumberAsync(number);
-            
-            _logger.LogInformation("[AUTH] Found {Count} phones with number {Number} (including current)", others.Count, number);
-            var oldPhone = others.FirstOrDefault(p => p.Id != phoneId && p.Status == "active");
-            if (oldPhone != null)
-            {
-                _logger.LogWarning("[AUTH] Found existing active phone {OldPhoneId} with same number {Number} — marking inactive", oldPhone.Id, number);
-                await _supabaseService.SetPhoneStatusAsync(oldPhone.Id, "inactive");
-                _logger.LogWarning("[AUTH] Takeover: {Old} → {New}", oldPhone.Id, phoneId);
-            }
+            _logger.LogInformation("[AUTH] ✓ Saved creds for winner phone {PhoneId}", phoneId);
         }
-        finally { sem.Release(); }
     }
+    finally
+    {
+        sem.Release();
+    }
+}
 
     private async Task HandleIncomingMessage(Guid phoneId, Phone phone, ContainerEventPayload payload)
     {
