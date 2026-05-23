@@ -149,23 +149,29 @@ public async Task<int> GetMaxRevisionByNumberAsync(string phoneNumber)
 }
 
 
+
 public async Task<string> GetMaskedUsernameAsync(Guid userId)
 {
     try
     {
-        var response = await _client.Auth.Admin.GetUserById(userId.ToString());
-        var email    = response?.Email ?? "";
+        // שלוף email דרך טבלת phones — user_id קיים שם
+        var response = await _client
+            .Rpc("get_user_email", new { user_id = userId.ToString() })
+            .ExecuteAsync<string>();
+
+        var email     = response ?? "";
         var localPart = email.Contains('@') ? email.Split('@')[0] : email;
         var limited   = localPart.Length > 8 ? localPart[..8] : localPart;
         var masked    = limited.Length <= 4
             ? new string('*', 4) + limited
             : "****" + limited[^4..];
+
         return masked;
     }
     catch (Exception ex)
     {
         _logger.LogWarning(ex, "[AUTH] Failed to get username for {UserId}", userId);
-        return "****anon";
+        return "****" + userId.ToString("N")[..4];
     }
 }
 
