@@ -326,6 +326,9 @@ dotnet test
 dotnet publish -c Release -o ./publish
 ```
 docker ps -a
+בדוק אם הם זהים:
+
+md5sum /opt/whatsapp-data/auth_*/creds.json
 
 # עצור והסר את כל הקונטיינרים של whatsapp
 docker ps -a --filter "label=app=whatsapp-manager" --format "{{.ID}}" | xargs -r docker rm -f
@@ -345,6 +348,10 @@ sudo rm -rf /opt/whatsapp-data/*
 docker ps --format "table {{.Names}}\t{{.ID}}\t{{.Status}}"
 # ── מחק לוגים 
 rm -rf ./logs/*
+
+
+
+# או אחד אחד 
 
 # ── נקה טבלאות Supabase
 # הרץ ב-Supabase SQL Editor:
