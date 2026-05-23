@@ -3,6 +3,15 @@ using Supabase.Postgrest.Models;
 
 namespace WhatsAppDockerManager.Models;
 
+[Table("user_emails")]
+public class UserEmail : BaseModel
+{
+    [PrimaryKey("id")]
+    public Guid Id { get; set; }
+
+    [Column("email")]
+    public string? Email { get; set; }
+}
 [Table("phones")]
 public class Phone : BaseModel
 {
