@@ -85,7 +85,12 @@ private async Task HandleAuthenticated(Guid phoneId, Phone phone, ContainerEvent
 
     if (string.IsNullOrEmpty(payload.Phone))
         return;
-
+    if (payload.PayloadPhoneId.HasValue && payload.PayloadPhoneId.Value != phoneId)
+    {
+        _logger.LogWarning("[AUTH] PhoneId mismatch! URL={UrlId} Payload={PayloadId} — ignoring creds",
+            phoneId, payload.PayloadPhoneId.Value);
+        return;
+    }
     var number = "+" + payload.Phone.Replace("+", "");
     _logger.LogInformation("[AUTH] Authenticated phone number: {Number}", number);
 
