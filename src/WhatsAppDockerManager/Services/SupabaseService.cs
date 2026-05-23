@@ -81,7 +81,7 @@ public interface ISupabaseService
 
      Task<int> GetMaxRevisionByNumberAsync(string phoneNumber);
      Task<int> IncrementPhoneRevisionAsync(Guid phoneId);
-    
+    Task<string> GetMaskedUsernameAsync(Guid userId);
 }
 
 public class SupabaseService : ISupabaseService
@@ -147,6 +147,28 @@ public async Task<int> GetMaxRevisionByNumberAsync(string phoneNumber)
         return 0;
     }
 }
+
+
+public async Task<string> GetMaskedUsernameAsync(Guid userId)
+{
+    try
+    {
+        var response = await _client.Auth.Admin.GetUserById(userId.ToString());
+        var email    = response?.Email ?? "";
+        var localPart = email.Contains('@') ? email.Split('@')[0] : email;
+        var limited   = localPart.Length > 8 ? localPart[..8] : localPart;
+        var masked    = limited.Length <= 4
+            ? new string('*', 4) + limited
+            : "****" + limited[^4..];
+        return masked;
+    }
+    catch (Exception ex)
+    {
+        _logger.LogWarning(ex, "[AUTH] Failed to get username for {UserId}", userId);
+        return "****anon";
+    }
+}
+
 public async Task<int> IncrementPhoneRevisionAsync(Guid phoneId)
 {
     var phone = await GetPhoneByIdAsync(phoneId);
