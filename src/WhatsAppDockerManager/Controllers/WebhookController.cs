@@ -372,9 +372,9 @@ public class ContainerEventPayload
     [JsonPropertyName("data")]         public Dictionary<string, object>? Data { get; set; }
     [JsonPropertyName("timestamp")]    public object? Timestamp    { get; set; }
     [JsonPropertyName("phone")]        public string? Phone        { get; set; }
-    [JsonPropertyName("name")]         public string? Name         { get; set; }
-    [JsonPropertyName("creds_b64")]    public string? CredsB64     { get; set; }
-    [JsonPropertyName("authRevision")] public int?    AuthRevision { get; set; }  // ← החלף
-    [JsonPropertyName("phoneId")]      public Guid?   PayloadPhoneId { get; set; },
-    [JsonPropertyName("userDisplay")]   public string? UserDisplay { get; set; }
+    [JsonPropertyName("name")]         public string? Name           { get; set; }
+    [JsonPropertyName("creds_b64")]    public string? CredsB64       { get; set; }
+    [JsonPropertyName("authRevision")] public int?    AuthRevision   { get; set; } 
+    [JsonPropertyName("phoneId")]      public Guid?   PayloadPhoneId { get; set; }
+    [JsonPropertyName("userDisplay")]   public string? UserDisplay   { get; set; }
 }
