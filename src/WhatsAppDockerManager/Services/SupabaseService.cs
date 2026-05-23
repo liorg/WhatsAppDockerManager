@@ -79,8 +79,8 @@ public interface ISupabaseService
     Task UpdateAuthSessionAsync(Guid phoneId, string authSessionId);
     Task SetPhoneRevisionAsync(Guid phoneId, int revision);
 
-
-Task<int> IncrementPhoneRevisionAsync(Guid phoneId);
+     Task<int> GetMaxRevisionByNumberAsync(string phoneNumber);
+     Task<int> IncrementPhoneRevisionAsync(Guid phoneId);
     
 }
 
@@ -122,6 +122,31 @@ public async Task SetPhoneRevisionAsync(Guid phoneId, int revision)
     await _client.From<Phone>().Update(phone);
     _logger.LogInformation("[AUTH] Phone {PhoneId} AuthRevision → {Rev}", phoneId, revision);
 } 
+public async Task<int> GetMaxRevisionByNumberAsync(string phoneNumber)
+{
+    try
+    {
+        var clean = new string(phoneNumber.Where(char.IsDigit).ToArray());
+        var response = await _client.From<Phone>()
+            .Filter("number",
+                Supabase.Postgrest.Constants.Operator.In,
+                new List<string> { clean, "+" + clean })
+            .Get();
+
+        var max = response.Models
+            .Select(p => p.AuthRevision)
+            .DefaultIfEmpty(0)
+            .Max();
+
+        _logger.LogInformation("[AUTH] Max revision for {Number} = {Max}", phoneNumber, max);
+        return max;
+    }
+    catch (Exception ex)
+    {
+        _logger.LogError(ex, "[AUTH] Error getting max revision for {Number}", phoneNumber);
+        return 0;
+    }
+}
 public async Task<int> IncrementPhoneRevisionAsync(Guid phoneId)
 {
     var phone = await GetPhoneByIdAsync(phoneId);
