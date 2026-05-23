@@ -148,24 +148,23 @@ public async Task<int> GetMaxRevisionByNumberAsync(string phoneNumber)
     }
 }
 
-
-
 public async Task<string> GetMaskedUsernameAsync(Guid userId)
 {
     try
     {
-        // שלוף email דרך טבלת phones — user_id קיים שם
-        var response = await _client
-            .Rpc("get_user_email", new { user_id = userId.ToString() })
-            .ExecuteAsync<string>();
+        var response = await _client.From<UserEmail>()
+            .Where(u => u.Id == userId)
+            .Limit(1)
+            .Get();
 
-        var email     = response ?? "";
+        var email     = response.Models.FirstOrDefault()?.Email ?? "";
         var localPart = email.Contains('@') ? email.Split('@')[0] : email;
         var limited   = localPart.Length > 8 ? localPart[..8] : localPart;
         var masked    = limited.Length <= 4
             ? new string('*', 4) + limited
             : "****" + limited[^4..];
 
+        _logger.LogInformation("[AUTH] Masked user: {Masked}", masked);
         return masked;
     }
     catch (Exception ex)
