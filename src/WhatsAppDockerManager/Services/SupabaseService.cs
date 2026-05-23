@@ -157,20 +157,32 @@ public async Task<string> GetMaskedUsernameAsync(Guid userId)
             .Limit(1)
             .Get();
 
-        var email     = response.Models.FirstOrDefault()?.Email ?? "";
-        var localPart = email.Contains('@') ? email.Split('@')[0] : email;
-        var limited   = localPart.Length > 8 ? localPart[..8] : localPart;
-        var masked    = limited.Length <= 4
-            ? new string('*', 4) + limited
-            : "****" + limited[^4..];
+        var email = response.Models.FirstOrDefault()?.Email ?? "";
 
-        _logger.LogInformation("[AUTH] Masked user: {Masked}", masked);
-        return masked;
+        if (!email.Contains('@'))
+            return "****@****";
+
+        var parts     = email.Split('@');
+        var localPart = parts[0];
+        var domain    = parts[1];
+
+        // ── 4 אותיות ראשונות + ** ────────────────────────────────────
+        var maskedLocal  = localPart.Length >= 4
+            ? localPart[..4]
+            : localPart.PadRight(4, '*');
+
+        // ── ** + אות אחרונה של domain ────────────────────────────────
+        var maskedDomain = domain.Length >= 1 ? domain[^1..] : "*";
+
+        var result = $"{maskedLocal}**@**{maskedDomain}";
+
+        _logger.LogInformation("[AUTH] Masked user: {Masked}", result);
+        return result;
     }
     catch (Exception ex)
     {
         _logger.LogWarning(ex, "[AUTH] Failed to get username for {UserId}", userId);
-        return "****" + userId.ToString("N")[..4];
+        return "****@****";
     }
 }
 
