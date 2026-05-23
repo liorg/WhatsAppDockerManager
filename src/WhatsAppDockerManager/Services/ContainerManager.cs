@@ -223,18 +223,13 @@ public class ContainerManager : IContainerManager
             var revision = maxRevision + 1;
             await _supabaseService.SetPhoneRevisionAsync(phone.Id, revision);
 
-            _logger.LogInformation(
-                "[CONTAINER] Auth revision: maxExisting={Max} → new={New} for phone {PhoneId}",
-                maxRevision, revision, phone.Id);
-          //  await _supabaseService.UpdateAuthSessionAsync(phone.Id, authSessionId);
-          //  phone.AuthSessionId = authSessionId;
+         var maskedUser = phone.UserId.HasValue  ? await _supabaseService.GetMaskedUsernameAsync(phone.UserId.Value) : "****anon";
 
-            _logger.LogInformation(
-                "[CONTAINER] Auth session created. PhoneId={PhoneId}, revision={revision}",
-                phone.Id,
-                revision);
+            _logger.LogInformation("[CONTAINER] revision={Rev} user={User}", revision, maskedUser);
 
-            var containerId = await _dockerService.CreateAndStartContainerAsync(phone, fastApiPort, baileysPort,revision);
+            var containerId = await _dockerService.CreateAndStartContainerAsync(phone, fastApiPort, baileysPort, revision, maskedUser);
+
+            //var containerId = await _dockerService.CreateAndStartContainerAsync(phone, fastApiPort, baileysPort,revision);
 
             if (containerId == null)
             {
