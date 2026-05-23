@@ -215,8 +215,17 @@ public class ContainerManager : IContainerManager
 
             // כאן להוסיף
            // ── הגדל revision לפני הפעלת container ──────────────────────────
-             var revision = await _supabaseService.IncrementPhoneRevisionAsync(phone.Id);
+             //var revision = await _supabaseService.IncrementPhoneRevisionAsync(phone.Id);
+            // ── קח max revision מכל phones עם אותו מספר, הקפץ ב-1 ──────────
+            var maxRevision = !string.IsNullOrEmpty(phone.Number)
+                ? await _supabaseService.GetMaxRevisionByNumberAsync(phone.Number)
+                : 0;
+            var revision = maxRevision + 1;
+            await _supabaseService.SetPhoneRevisionAsync(phone.Id, revision);
 
+            _logger.LogInformation(
+                "[CONTAINER] Auth revision: maxExisting={Max} → new={New} for phone {PhoneId}",
+                maxRevision, revision, phone.Id);
           //  await _supabaseService.UpdateAuthSessionAsync(phone.Id, authSessionId);
           //  phone.AuthSessionId = authSessionId;
 
