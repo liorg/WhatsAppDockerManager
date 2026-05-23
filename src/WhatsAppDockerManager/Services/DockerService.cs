@@ -8,7 +8,8 @@ namespace WhatsAppDockerManager.Services;
 public interface IDockerService
 {
     Task<bool> PullImageAsync(string imageName);
-    Task<string?> CreateAndStartContainerAsync(Phone phone, int fastApiPort, int baileysPort, int authRevision = 0);
+   // Task<string?> CreateAndStartContainerAsync(Phone phone, int fastApiPort, int baileysPort, int authRevision = 0);
+    Task<string?> CreateAndStartContainerAsync(Phone phone, int fastApiPort, int baileysPort, int authRevision = 0, string maskedUsername = "****user");
     Task<bool> StopContainerAsync(string containerId);
     Task<bool> RemoveContainerAsync(string containerId);
     Task<ContainerInspectResponse?> InspectContainerAsync(string containerId);
@@ -135,7 +136,7 @@ public class DockerService : IDockerService, IDisposable
         }
     }
 
-    public async Task<string?> CreateAndStartContainerAsync(Phone phone, int fastApiPort, int baileysPort, int authRevision = 0)
+    public async Task<string?> CreateAndStartContainerAsync(Phone phone, int fastApiPort, int baileysPort, int authRevision = 0, string maskedUsername = "****user")
     {
         try
         {
@@ -175,7 +176,8 @@ public class DockerService : IDockerService, IDisposable
                         $"PHONE_NUMBER={phone.Number}",
                         $"PHONE_ID={phone.Id}",
                         $"REDIS_URL=redis://{RedisContainerName}:6379",
-                        $"AUTH_REVISION={authRevision}",  // ← חדש
+                        $"AUTH_REVISION={authRevision}",
+                        $"USER_DISPLAY={maskedUsername}",  
                     },
                     ExposedPorts = new Dictionary<string, EmptyStruct>
                     {
