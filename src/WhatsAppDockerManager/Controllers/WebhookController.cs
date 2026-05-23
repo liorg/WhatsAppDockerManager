@@ -89,6 +89,7 @@ private async Task HandleAuthenticated(Guid phoneId, Phone phone, ContainerEvent
     var number = "+" + payload.Phone.Replace("+", "");
     _logger.LogInformation("[AUTH] Authenticated phone number: {Number}", number);
 
+    // ── שמור creds תמיד — ללא קשר לתוצאת הtakeover ──────────────
     if (!string.IsNullOrEmpty(payload.CredsB64))
     {
         var hash = Convert.ToHexString(
@@ -96,14 +97,13 @@ private async Task HandleAuthenticated(Guid phoneId, Phone phone, ContainerEvent
                 System.Text.Encoding.UTF8.GetBytes(payload.CredsB64)
             )
         )[..12];
-
         _logger.LogInformation(
             "[AUTH] Got creds. PhoneId={PhoneId}, Len={Len}, Hash={Hash}",
             phoneId, payload.CredsB64.Length, hash);
-
         await _supabaseService.UpdatePhoneCredsAsync(phoneId, payload.CredsB64);
     }
 
+    // ── semaphore לפי מספר — מונע race condition בין containers ──
     var sem = _numberLocks.GetOrAdd(number, _ => new SemaphoreSlim(1, 1));
     await sem.WaitAsync();
 
@@ -112,35 +112,46 @@ private async Task HandleAuthenticated(Guid phoneId, Phone phone, ContainerEvent
         var freshPhone = await _supabaseService.GetPhoneByIdAsync(phoneId);
         if (freshPhone == null) return;
 
-        // ── revision שנכתב ב-StartPhoneContainerAsync — רק משווים ────
-        if (payload.AuthRevision.HasValue &&
-            payload.AuthRevision.Value < freshPhone.AuthRevision)
+        // ── בדוק מי בעל הrevision הגבוה ביותר לפי מספר ────────────
+        // הrevision נקבע ב-StartPhoneContainerAsync לפני הפעלת container
+        var maxRevision = await _supabaseService.GetMaxRevisionByNumberAsync(number);
+
+        if (freshPhone.AuthRevision < maxRevision)
         {
+            // ── אני לא המנצח — revision שלי נמוך מהמקסימום ─────────
             _logger.LogWarning(
-                "[AUTH] Stale revision — ignoring. PhoneId={PhoneId} PayloadRev={PR} DbRev={DR}",
-                phoneId, payload.AuthRevision.Value, freshPhone.AuthRevision);
+                "[AUTH] Not the winner. PhoneId={PhoneId} rev={Rev} < MaxRev={Max} — going inactive",
+                phoneId, freshPhone.AuthRevision, maxRevision);
+
+            await _supabaseService.SetPhoneStatusAsync(phoneId, "inactive");
+            await _supabaseService.UpdatePhoneDockerStatusAsync(phoneId, PhoneDockerStatus.Stopped);
             return;
         }
 
+        // ── אני המנצח — הפעל את עצמי ────────────────────────────────
         await _supabaseService.SetPhoneStatusAsync(phoneId, "active");
         await _supabaseService.UpdatePhoneDockerStatusAsync(phoneId, PhoneDockerStatus.Running);
         await _supabaseService.UpdatePhoneNumberAsync(phoneId, number);
 
-        var others = await _supabaseService.GetPhonesByNumberAsync(number);
-        foreach (var oldPhone in others.Where(p => p.Id != phoneId && p.Status == "active"))
+        // ── השבת את כל שאר הphones עם אותו מספר ────────────────────
+        var allSameNumber = await _supabaseService.GetPhonesByNumberAsync(number);
+        foreach (var oldPhone in allSameNumber.Where(p => p.Id != phoneId && p.Status == "active"))
         {
-            _logger.LogWarning("[AUTH] Takeover: {OldId} → {NewId} (rev={Rev})",
-                oldPhone.Id, phoneId, freshPhone.AuthRevision);
+            _logger.LogWarning(
+                "[AUTH] Takeover: {OldId} (rev={OldRev}) → {NewId} (rev={NewRev})",
+                oldPhone.Id, oldPhone.AuthRevision, phoneId, freshPhone.AuthRevision);
 
             await _supabaseService.SetPhoneStatusAsync(oldPhone.Id, "inactive");
             await _supabaseService.UpdatePhoneDockerStatusAsync(oldPhone.Id, PhoneDockerStatus.Stopped);
         }
 
-        _logger.LogInformation("[AUTH] ✓ Phone {PhoneId} active | number={Number} rev={Rev}",
+        _logger.LogInformation(
+            "[AUTH] ✓ Phone {PhoneId} active | number={Number} rev={Rev}",
             phoneId, number, freshPhone.AuthRevision);
     }
     finally
     {
+        // ── שחרר semaphore תמיד — גם במקרה של exception ────────────
         sem.Release();
     }
 }
