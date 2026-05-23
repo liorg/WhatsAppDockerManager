@@ -375,5 +375,6 @@ public class ContainerEventPayload
     [JsonPropertyName("name")]         public string? Name         { get; set; }
     [JsonPropertyName("creds_b64")]    public string? CredsB64     { get; set; }
     [JsonPropertyName("authRevision")] public int?    AuthRevision { get; set; }  // ← החלף
-    [JsonPropertyName("phoneId")]      public Guid?   PayloadPhoneId { get; set; }
+    [JsonPropertyName("phoneId")]      public Guid?   PayloadPhoneId { get; set; },
+    [JsonPropertyName("userDisplay")]   public string? UserDisplay { get; set; }
 }
