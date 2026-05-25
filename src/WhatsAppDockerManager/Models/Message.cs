@@ -16,7 +16,7 @@ public class Message : BaseModel
     // ← חסר בקוד הנוכחי!
     [Column("phone_id")]
     public Guid? PhoneId { get; set; }  
-    
+
     [Column("contact_id")]
     public Guid? ContactId { get; set; }
    
@@ -45,5 +45,9 @@ public class Message : BaseModel
     public string? ToolTip { get; set; }
 
     [Column("whatsapp_message_id")]
-public string? WhatsappMessageId { get; set; }
+    public string? WhatsappMessageId { get; set; }
+
+    [Column("media_url")]
+    public string? MediaUrl { get; set; }
+
 }
