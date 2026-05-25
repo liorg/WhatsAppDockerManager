@@ -28,6 +28,10 @@ public static class PhonePathHelper
     public static string ContactsPath(string basePath, Guid phoneId)
         => Path.Combine(basePath, $"contacts_{phoneId}");
 
+    /// <summary>/opt/whatsapp-data/contacts_{phoneId}/media</summary>
+    public static string MediaPath(string basePath, Guid phoneId)
+        => Path.Combine(ContactsPath(basePath, phoneId), "media");
+
     /// <summary>
     /// מחזיר את כל 3 הנתיבים ביחד
     /// </summary>
@@ -36,7 +40,7 @@ public static class PhonePathHelper
 
     // ── Directory helpers ─────────────────────────────────────────────
     /// <summary>
-    /// יוצר את 3 התיקיות אם לא קיימות (Linux בלבד)
+    /// יוצר את התיקיות אם לא קיימות (Linux בלבד)
     /// </summary>
     public static void EnsureDirectoriesExist(string basePath, Guid phoneId)
     {
@@ -45,10 +49,11 @@ public static class PhonePathHelper
         Directory.CreateDirectory(auth);
         Directory.CreateDirectory(logs);
         Directory.CreateDirectory(contacts);
+        Directory.CreateDirectory(Path.Combine(contacts, "media")); // ✅ חדש
     }
 
     /// <summary>
-    /// מוחק את 3 התיקיות אם קיימות
+    /// מוחק את כל התיקיות אם קיימות
     /// </summary>
     public static void DeleteDirectories(string basePath, Guid phoneId)
     {

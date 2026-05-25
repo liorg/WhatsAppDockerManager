@@ -57,7 +57,7 @@ public interface ISupabaseService
 
     Task<bool> MessageExistsAsync(string whatsappMessageId);
    Task<Message> AddMessageAsync(Guid phoneId, Guid contactId, string sender, object content, bool direction,
- string? leafId = null, string? whatsappMessageId = null, DateTime? whatsappTimestamp = null);
+ string? leafId = null, string? whatsappMessageId = null, DateTime? whatsappTimestamp = null,string? mediaUrl = null);  
 
 
     // PingSender operations
@@ -1138,40 +1138,40 @@ public async Task<int> IncrementPhoneRevisionAsync(Guid phoneId)
     /// JsonSerializer מטפל ב-JsonElement אוטומטית.
     /// </summary>
     public async Task<Message> AddMessageAsync(
-        Guid phoneId, Guid contactId, string sender, object content,
-        bool direction, string? leafId = null, string? whatsappMessageId = null,
-        DateTime? whatsappTimestamp = null)   // ← פרמטר חדש
+    Guid phoneId, Guid contactId, string sender, object content,
+    bool direction, string? leafId = null,
+    string? whatsappMessageId = null,
+    DateTime? whatsappTimestamp = null,
+    string? mediaUrl = null)    // ← חדש
+{
+    string contentJson;
+    try { contentJson = JsonSerializer.Serialize(content, _jsonOptions); }
+    catch (Exception ex)
     {
-        string contentJson;
-        try
-        {
-            contentJson = JsonSerializer.Serialize(content, _jsonOptions);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "[MSG] Failed to serialize content — falling back to empty object");
-            contentJson = "{}";
-        }
-    
-        _logger.LogDebug("[MSG] Saving content: {Content}", contentJson);
-    
-        var message = new Message
-        {
-            CallId            = null,
-            PhoneId           = phoneId,
-            ContactId         = contactId,
-            Sender            = sender,
-            Content           = contentJson,
-            Direction         = direction,
-            LeafId            = leafId,
-            WhatsappMessageId = whatsappMessageId,
-            Status            = "sent",
-            RetryCounter      = 0,
-            SentAt            = whatsappTimestamp ?? DateTime.UtcNow,  // ← timestamp אמיתי מ-WhatsApp
-        };
-    
-        return await CreateMessageAsync(message);
+        _logger.LogError(ex, "[MSG] Failed to serialize content");
+        contentJson = "{}";
     }
+ 
+    var message = new Message
+    {
+        CallId            = null,
+        PhoneId           = phoneId,
+        ContactId         = contactId,
+        Sender            = sender,
+        Content           = contentJson,
+        Direction         = direction,
+        LeafId            = leafId,
+        WhatsappMessageId = whatsappMessageId,
+        Status            = "sent",
+        RetryCounter      = 0,
+        SentAt            = whatsappTimestamp ?? DateTime.UtcNow,
+        MediaUrl          = mediaUrl,    // ← חדש
+    };
+ 
+    return await CreateMessageAsync(message);
+}
+ 
+
 
 
     #endregion

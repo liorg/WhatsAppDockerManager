@@ -164,6 +164,7 @@ public class DockerService : IDockerService, IDisposable
                 _logger.LogWarning("[DOCKER] Container {Name} already exists, removing...", containerName);
                 await RemoveContainerAsync(existing.ID);
             }
+            var ManagerUrl="http://172.17.0.1:5000";
 
             var createResponse = await _client.Containers
                 .CreateContainerAsync(new CreateContainerParameters
@@ -178,6 +179,7 @@ public class DockerService : IDockerService, IDisposable
                         $"REDIS_URL=redis://{RedisContainerName}:6379",
                         $"AUTH_REVISION={authRevision}",
                         $"USER_DISPLAY={maskedUsername}",  
+                        $"MANAGER_URL={ManagerUrl}",   
                     },
                     ExposedPorts = new Dictionary<string, EmptyStruct>
                     {
