@@ -16,8 +16,9 @@ public class MediaController : ControllerBase
     {
         _configuration = configuration;
         _logger        = logger;
-        _mediaBasePath = configuration["AppSettings:Docker:DataBasePath"] 
-                      ?? "/data";
+        _mediaBasePath = Environment.GetEnvironmentVariable("DATA_BASE_PATH") 
+              ?? configuration["AppSettings:Docker:DataBasePath"] 
+              ?? "/opt/whatsapp-data";
     }
 
     // GET /api/media/{phoneId}/{messageId}
