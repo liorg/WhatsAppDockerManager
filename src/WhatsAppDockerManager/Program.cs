@@ -24,6 +24,8 @@ builder.Configuration
 builder.Services.Configure<AppSettings>(builder.Configuration.GetSection("AppSettings"));
 
 builder.Services.AddSingleton<ISupabaseService, SupabaseService>();
+
+builder.Services. AddSingleton<ISenderLogService, SenderLogService>();
 builder.Services.AddSingleton<IDockerService, DockerService>();
 builder.Services.AddSingleton<IContainerManager, ContainerManager>();
 builder.Services.AddSingleton<OrphanContainerCleanupService>();
