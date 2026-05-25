@@ -324,6 +324,8 @@ private async Task SaveMessage(
     string contactNumber, string? contactLid,
     bool isIncoming, ContainerEventPayload payload)
 {
+      _logger.LogWarning("[MSG-SAVE-DATA] Keys={Keys}", 
+        payload.Data != null ? string.Join(",", payload.Data.Keys) : "null");
     var messageContent = new Dictionary<string, object?>();
  
     if (payload.Data != null)
@@ -339,49 +341,46 @@ private async Task SaveMessage(
         TryAdd(payload.Data, messageContent, "footer");
         TryAdd(payload.Data, messageContent, "sections");
         TryAdd(payload.Data, messageContent, "buttons");
+
+        TryAdd(payload.Data, messageContent, "mediaUrl");    // ← הוסף
     }
  
     if (!string.IsNullOrEmpty(payload.Type))
         messageContent["type"] = payload.Type;
  
-    _logger.LogInformation("[MSG-SAVE] type={Type} keys={Keys}",
-        payload.Type,
-        string.Join(",", messageContent.Keys));
+    // ── חלץ mediaUrl ──────────────────────────────────────────────
+    string? mediaUrl = null;
+    if (payload.Data?.TryGetValue("mediaUrl", out var mediaUrlVal) == true)
+        mediaUrl = mediaUrlVal?.ToString();
+ 
+    // ── המרת timestamp ────────────────────────────────────────────
+    DateTime? whatsappTimestamp = null;
+    if (payload.Timestamp != null)
+    {
+        long epochSeconds = 0;
+        if (payload.Timestamp is System.Text.Json.JsonElement tsEl &&
+            tsEl.ValueKind == System.Text.Json.JsonValueKind.Number)
+            epochSeconds = tsEl.GetInt64();
+        else
+            long.TryParse(payload.Timestamp.ToString(), out epochSeconds);
+ 
+        if (epochSeconds > 0)
+            whatsappTimestamp = DateTimeOffset.FromUnixTimeSeconds(epochSeconds).UtcDateTime;
+    }
  
     var messageSender = isIncoming
         ? (contactLid ?? contactNumber)
         : phone.Number ?? contactNumber;
  
-    // ── המרת timestamp מ-WhatsApp (Unix seconds) ל-DateTime ──────────
-    DateTime? whatsappTimestamp = null;
-    if (payload.Timestamp != null)
-    {
-        long epochSeconds = 0;
- 
-        if (payload.Timestamp is System.Text.Json.JsonElement tsEl &&
-            tsEl.ValueKind == System.Text.Json.JsonValueKind.Number)
-        {
-            epochSeconds = tsEl.GetInt64();
-        }
-        else
-        {
-            long.TryParse(payload.Timestamp.ToString(), out epochSeconds);
-        }
- 
-        if (epochSeconds > 0)
-        {
-            whatsappTimestamp = DateTimeOffset.FromUnixTimeSeconds(epochSeconds).UtcDateTime;
-            _logger.LogDebug("[MSG-SAVE] WhatsApp timestamp: {Ts} → {Dt}", epochSeconds, whatsappTimestamp);
-        }
-    }
- 
     await _supabaseService.AddMessageAsync(
         phoneId, contact.Id, messageSender, messageContent,
-        direction: isIncoming, leafId: null,
+        direction:         isIncoming,
+        leafId:            null,
         whatsappMessageId: payload.MessageId,
-        whatsappTimestamp: whatsappTimestamp);   // ← חדש
+        whatsappTimestamp: whatsappTimestamp,
+        mediaUrl:          mediaUrl);    // ← חדש
 }
- 
+
 
 
     // ── Helper ────────────────────────────────────────────────────────────────
@@ -409,4 +408,6 @@ public class ContainerEventPayload
     [JsonPropertyName("authRevision")] public int?    AuthRevision   { get; set; } 
     [JsonPropertyName("phoneId")]      public Guid?   PayloadPhoneId { get; set; }
     [JsonPropertyName("userDisplay")]   public string? UserDisplay   { get; set; }
+
+    
 }
