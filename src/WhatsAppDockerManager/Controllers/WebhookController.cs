@@ -342,6 +342,11 @@ private async Task SaveMessage(
         TryAdd(payload.Data, messageContent, "sections");
         TryAdd(payload.Data, messageContent, "buttons");
 
+
+           // ← הוסף זמנית
+    _logger.LogWarning("[MSG-SAVE] mediaUrl in Data={Exists} value={Val}",
+        payload.Data.ContainsKey("mediaUrl"),
+        payload.Data.TryGetValue("mediaUrl", out var v) ? v?.ToString() : "null");
         TryAdd(payload.Data, messageContent, "mediaUrl");    // ← הוסף
     }
  
