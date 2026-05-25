@@ -319,54 +319,70 @@ private async Task HandleAuthenticated(Guid phoneId, Phone phone, ContainerEvent
         }
     }
 
-    private async Task SaveMessage(
-        Guid phoneId, Phone phone, Contact contact,
-        string contactNumber, string? contactLid,
-        bool isIncoming, ContainerEventPayload payload)
+private async Task SaveMessage(
+    Guid phoneId, Phone phone, Contact contact,
+    string contactNumber, string? contactLid,
+    bool isIncoming, ContainerEventPayload payload)
+{
+    var messageContent = new Dictionary<string, object?>();
+ 
+    if (payload.Data != null)
     {
-        var messageContent = new Dictionary<string, object?>();
-
-        if (payload.Data != null)
-        {
-            // ── שדות בסיסיים ──────────────────────────────────────
-            TryAdd(payload.Data, messageContent, "text");
-            TryAdd(payload.Data, messageContent, "caption");
-            TryAdd(payload.Data, messageContent, "buttonId");
-            TryAdd(payload.Data, messageContent, "selectedId");
-            TryAdd(payload.Data, messageContent, "displayText");
-
-            // ── list_message ──────────────────────────────────────
-            TryAdd(payload.Data, messageContent, "title");
-            TryAdd(payload.Data, messageContent, "description");
-            TryAdd(payload.Data, messageContent, "buttonText");
-            TryAdd(payload.Data, messageContent, "footer");
-            TryAdd(payload.Data, messageContent, "sections");
-
-            // ── buttons ───────────────────────────────────────────
-            TryAdd(payload.Data, messageContent, "buttons");
-
-          //  TryAdd(payload.Data, messageContent, "fromMe");
-          //  TryAdd(payload.Data, messageContent, "pushName");
-          //  TryAdd(payload.Data, messageContent, "lid");
-        }
-
-        // type תמיד נשמר
-        if (!string.IsNullOrEmpty(payload.Type))
-            messageContent["type"] = payload.Type;
-
-        _logger.LogInformation("[MSG-SAVE] type={Type} keys={Keys}",
-            payload.Type,
-            string.Join(",", messageContent.Keys));
-
-        var messageSender = isIncoming
-            ? (contactLid ?? contactNumber)
-            : phone.Number ?? contactNumber;
-
-        await _supabaseService.AddMessageAsync(
-            phoneId, contact.Id, messageSender, messageContent,
-            direction: isIncoming, leafId: null,
-            whatsappMessageId: payload.MessageId);
+        TryAdd(payload.Data, messageContent, "text");
+        TryAdd(payload.Data, messageContent, "caption");
+        TryAdd(payload.Data, messageContent, "buttonId");
+        TryAdd(payload.Data, messageContent, "selectedId");
+        TryAdd(payload.Data, messageContent, "displayText");
+        TryAdd(payload.Data, messageContent, "title");
+        TryAdd(payload.Data, messageContent, "description");
+        TryAdd(payload.Data, messageContent, "buttonText");
+        TryAdd(payload.Data, messageContent, "footer");
+        TryAdd(payload.Data, messageContent, "sections");
+        TryAdd(payload.Data, messageContent, "buttons");
     }
+ 
+    if (!string.IsNullOrEmpty(payload.Type))
+        messageContent["type"] = payload.Type;
+ 
+    _logger.LogInformation("[MSG-SAVE] type={Type} keys={Keys}",
+        payload.Type,
+        string.Join(",", messageContent.Keys));
+ 
+    var messageSender = isIncoming
+        ? (contactLid ?? contactNumber)
+        : phone.Number ?? contactNumber;
+ 
+    // ── המרת timestamp מ-WhatsApp (Unix seconds) ל-DateTime ──────────
+    DateTime? whatsappTimestamp = null;
+    if (payload.Timestamp != null)
+    {
+        long epochSeconds = 0;
+ 
+        if (payload.Timestamp is System.Text.Json.JsonElement tsEl &&
+            tsEl.ValueKind == System.Text.Json.JsonValueKind.Number)
+        {
+            epochSeconds = tsEl.GetInt64();
+        }
+        else
+        {
+            long.TryParse(payload.Timestamp.ToString(), out epochSeconds);
+        }
+ 
+        if (epochSeconds > 0)
+        {
+            whatsappTimestamp = DateTimeOffset.FromUnixTimeSeconds(epochSeconds).UtcDateTime;
+            _logger.LogDebug("[MSG-SAVE] WhatsApp timestamp: {Ts} → {Dt}", epochSeconds, whatsappTimestamp);
+        }
+    }
+ 
+    await _supabaseService.AddMessageAsync(
+        phoneId, contact.Id, messageSender, messageContent,
+        direction: isIncoming, leafId: null,
+        whatsappMessageId: payload.MessageId,
+        whatsappTimestamp: whatsappTimestamp);   // ← חדש
+}
+ 
+
 
     // ── Helper ────────────────────────────────────────────────────────────────
     private static void TryAdd(

@@ -5,96 +5,160 @@ using System.Text.Json;
 
 namespace WhatsAppDockerManager.Controllers;
 
-/// <summary>
-/// Send Controller - Wrapper for sending messages (Docker not exposed)
-/// </summary>
 [ApiController]
 [Route("api/phones/{phoneId}/send")]
 public class SendController : ControllerBase
 {
-    private readonly ISupabaseService _supabaseService;
+    private readonly ISupabaseService   _supabaseService;
+    private readonly ISenderLogService  _senderLogService;   // ← חדש
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<SendController> _logger;
 
     public SendController(
-        ISupabaseService supabaseService,
+        ISupabaseService   supabaseService,
+        ISenderLogService  senderLogService,               // ← inject
         IHttpClientFactory httpClientFactory,
         ILogger<SendController> logger)
     {
-        _supabaseService = supabaseService;
+        _supabaseService   = supabaseService;
+        _senderLogService  = senderLogService;
         _httpClientFactory = httpClientFactory;
-        _logger = logger;
+        _logger            = logger;
     }
 
-    /// <summary>
-    /// Send text message
-    /// </summary>
+    // ── Send text ─────────────────────────────────────────────────────────────
     [HttpPost("text")]
     public async Task<IActionResult> SendText(Guid phoneId, [FromBody] SendTextRequest request)
     {
-        return await ForwardToContainer(phoneId, "/send/text", request, request.Jid, new { text = request.Text });
+        return await ForwardToContainer(phoneId, "/send/text", request, request.Jid,
+            "text", new { text = request.Text });
     }
 
-    /// <summary>
-    /// Send buttons (up to 3)
-    /// </summary>
+    // ── Send buttons ──────────────────────────────────────────────────────────
     [HttpPost("buttons")]
     public async Task<IActionResult> SendButtons(Guid phoneId, [FromBody] SendButtonsRequest request)
     {
-        return await ForwardToContainer(phoneId, "/send/buttons", request, request.Jid, 
-            new { type = "buttons", text = request.Text, buttons = request.Buttons });
+        return await ForwardToContainer(phoneId, "/send/buttons", request, request.Jid,
+            "buttons", new { text = request.Text, buttons = request.Buttons, footer = request.Footer });
     }
 
-    /// <summary>
-    /// Send list menu
-    /// </summary>
+    // ── Send list ─────────────────────────────────────────────────────────────
     [HttpPost("list")]
     public async Task<IActionResult> SendList(Guid phoneId, [FromBody] SendListRequest request)
     {
-        return await ForwardToContainer(phoneId, "/send/list", request, request.Jid, 
-            new { type = "list", text = request.Text, sections = request.Sections });
+        return await ForwardToContainer(phoneId, "/send/list", request, request.Jid,
+            "list", new { text = request.Text, title = request.Title, sections = request.Sections });
     }
 
-    /// <summary>
-    /// Send button response (simulate button click)
-    /// </summary>
+    // ── Send button-response ──────────────────────────────────────────────────
     [HttpPost("button-response")]
     public async Task<IActionResult> SendButtonResponse(Guid phoneId, [FromBody] SendButtonResponseRequest request)
     {
-        return await ForwardToContainer(phoneId, "/send/button-response", request, request.Jid, 
-            new { type = "button_response", buttonId = request.ButtonId });
+        return await ForwardToContainer(phoneId, "/send/button-response", request, request.Jid,
+            "button_response", new { buttonId = request.ButtonId, displayText = request.DisplayText });
     }
 
-    /// <summary>
-    /// Send list response (simulate list selection)
-    /// </summary>
+    // ── Send list-response ────────────────────────────────────────────────────
     [HttpPost("list-response")]
     public async Task<IActionResult> SendListResponse(Guid phoneId, [FromBody] SendListResponseRequest request)
     {
-        return await ForwardToContainer(phoneId, "/send/list-response", request, request.Jid, 
-            new { type = "list_response", rowId = request.RowId });
+        return await ForwardToContainer(phoneId, "/send/list-response", request, request.Jid,
+            "list_response", new { rowId = request.RowId, title = request.Title });
     }
 
-    /// <summary>
-    /// Get WhatsApp connection status
-    /// </summary>
+    // ── Send ping ─────────────────────────────────────────────────────────────
+    [HttpPost("ping")]
+    public async Task<IActionResult> SendPing(Guid phoneId, [FromBody] SendPingRequest request)
+    {
+        var phone = await _supabaseService.GetPhoneByIdAsync(phoneId);
+        if (phone == null)          return NotFound(new { error = "Phone not found" });
+        if (string.IsNullOrEmpty(phone.DockerUrl))
+            return BadRequest(new { error = "Container not running" });
+
+        string? whatsappMessageId = null;
+        var targetNumber = request.Jid.Split('@')[0];
+
+        try
+        {
+            var pingSender = await _supabaseService.CreatePingSenderAsync(
+                phoneId, targetNumber, null, phone.UserId);
+
+            _logger.LogInformation("[PING] Created ping_sender {PsId}", pingSender.Id);
+
+            var client     = _httpClientFactory.CreateClient();
+            client.Timeout = TimeSpan.FromSeconds(30);
+            var sendReq    = new { jid = request.Jid, text = request.Text ?? "🔔" };
+
+            var response        = await client.PostAsJsonAsync($"{phone.DockerUrl}/send/text", sendReq);
+            var responseContent = await response.Content.ReadAsStringAsync();
+
+            if (!response.IsSuccessStatusCode)
+            {
+                // ── log כישלון ────────────────────────────────────
+                await _senderLogService.LogAsync(phoneId, request.Jid, "ping",
+                    sendReq, status: "failed",
+                    errorMessage: $"{(int)response.StatusCode}: {responseContent}");
+
+                return StatusCode((int)response.StatusCode,
+                    JsonSerializer.Deserialize<object>(responseContent));
+            }
+
+            try
+            {
+                var json = JsonSerializer.Deserialize<JsonElement>(responseContent);
+                if (json.TryGetProperty("messageId", out var msgId))
+                    whatsappMessageId = msgId.GetString();
+            }
+            catch { }
+
+            if (!string.IsNullOrEmpty(whatsappMessageId))
+            {
+                pingSender.PingMessageId = whatsappMessageId;
+                await _supabaseService.UpdatePingSenderAsync(pingSender);
+            }
+
+            var contact = await _supabaseService.GetContactByNumberAsync(phoneId, targetNumber);
+            if (contact != null && pingSender.ContactId == null)
+            {
+                pingSender.ContactId = contact.Id;
+                await _supabaseService.UpdatePingSenderAsync(pingSender);
+            }
+
+            // ── log הצלחה ─────────────────────────────────────────
+            await _senderLogService.LogAsync(phoneId, request.Jid, "ping",
+                sendReq, whatsappMessageId: whatsappMessageId);
+
+            return Ok(new
+            {
+                success      = true,
+                pingSenderId = pingSender.Id,
+                messageId    = whatsappMessageId,
+                contactId    = contact?.Id,
+            });
+        }
+        catch (Exception ex)
+        {
+            await _senderLogService.LogAsync(phoneId, request.Jid, "ping",
+                new { text = request.Text }, status: "failed", errorMessage: ex.Message);
+
+            _logger.LogError(ex, "[PING] Error for phone {PhoneId}", phoneId);
+            return StatusCode(503, new { error = "Container unavailable", details = ex.Message });
+        }
+    }
+
+    // ── Status / QR (ללא שינוי) ───────────────────────────────────────────────
     [HttpGet("status")]
     public async Task<IActionResult> GetStatus(Guid phoneId)
     {
         var phone = await _supabaseService.GetPhoneByIdAsync(phoneId);
-        if (phone == null)
-            return NotFound(new { error = "Phone not found" });
-
-        if (string.IsNullOrEmpty(phone.DockerUrl))
-            return BadRequest(new { error = "Container not running" });
-
+        if (phone == null) return NotFound(new { error = "Phone not found" });
+        if (string.IsNullOrEmpty(phone.DockerUrl)) return BadRequest(new { error = "Container not running" });
         try
         {
             var client = _httpClientFactory.CreateClient();
             client.Timeout = TimeSpan.FromSeconds(10);
             var response = await client.GetAsync($"{phone.DockerUrl}/status");
-            var content = await response.Content.ReadAsStringAsync();
-            return Content(content, "application/json");
+            return Content(await response.Content.ReadAsStringAsync(), "application/json");
         }
         catch (Exception ex)
         {
@@ -103,26 +167,18 @@ public class SendController : ControllerBase
         }
     }
 
-    /// <summary>
-    /// Get QR code for authentication
-    /// </summary>
     [HttpGet("qrcode")]
     public async Task<IActionResult> GetQrCode(Guid phoneId)
     {
         var phone = await _supabaseService.GetPhoneByIdAsync(phoneId);
-        if (phone == null)
-            return NotFound(new { error = "Phone not found" });
-
-        if (string.IsNullOrEmpty(phone.DockerUrl))
-            return BadRequest(new { error = "Container not running" });
-
+        if (phone == null) return NotFound(new { error = "Phone not found" });
+        if (string.IsNullOrEmpty(phone.DockerUrl)) return BadRequest(new { error = "Container not running" });
         try
         {
             var client = _httpClientFactory.CreateClient();
             client.Timeout = TimeSpan.FromSeconds(10);
             var response = await client.GetAsync($"{phone.DockerUrl}/qrcode");
-            var content = await response.Content.ReadAsStringAsync();
-            return Content(content, "application/json");
+            return Content(await response.Content.ReadAsStringAsync(), "application/json");
         }
         catch (Exception ex)
         {
@@ -131,26 +187,18 @@ public class SendController : ControllerBase
         }
     }
 
-    /// <summary>
-    /// Get QR code as image
-    /// </summary>
     [HttpGet("qrcode/image")]
     public async Task<IActionResult> GetQrCodeImage(Guid phoneId)
     {
         var phone = await _supabaseService.GetPhoneByIdAsync(phoneId);
-        if (phone == null)
-            return NotFound(new { error = "Phone not found" });
-
-        if (string.IsNullOrEmpty(phone.DockerUrl))
-            return BadRequest(new { error = "Container not running" });
-
+        if (phone == null) return NotFound(new { error = "Phone not found" });
+        if (string.IsNullOrEmpty(phone.DockerUrl)) return BadRequest(new { error = "Container not running" });
         try
         {
             var client = _httpClientFactory.CreateClient();
             client.Timeout = TimeSpan.FromSeconds(10);
             var response = await client.GetAsync($"{phone.DockerUrl}/qrcode/image");
-            var imageBytes = await response.Content.ReadAsByteArrayAsync();
-            return File(imageBytes, "image/png");
+            return File(await response.Content.ReadAsByteArrayAsync(), "image/png");
         }
         catch (Exception ex)
         {
@@ -158,229 +206,81 @@ public class SendController : ControllerBase
             return StatusCode(503, new { error = "Container unavailable" });
         }
     }
-/// <summary>
-/// Send PING message to identify contact LID
-/// </summary>
-// ════════════════════════════════════════════════════════════════════
-// SendController.cs — SendPing תיקון
-// אחרי יצירת ping_sender — מעדכן contact_id מיד
-// ════════════════════════════════════════════════════════════════════
-// ════════════════════════════════════════════════════════════════════
-// SendController.cs — SendPing תיקון
-// אחרי יצירת ping_sender — מעדכן contact_id מיד
-// ════════════════════════════════════════════════════════════════════
 
-[HttpPost("ping")]
-public async Task<IActionResult> SendPing(Guid phoneId, [FromBody] SendPingRequest request)
-{
-    var phone = await _supabaseService.GetPhoneByIdAsync(phoneId);
-    if (phone == null)
-        return NotFound(new { error = "Phone not found" });
-
-    if (string.IsNullOrEmpty(phone.DockerUrl))
-        return BadRequest(new { error = "Container not running" });
-
-    try
-    {
-        var targetNumber = request.Jid.Split('@')[0];
-
-        // ── שלב 1: צור ping_sender ב-DB לפני השליחה ─────────────
-        // חיוני: WEBHOOK מגיע לפני שה-response חוזר
-        // ping_sender חייב להיות קיים כדי שה-WEBHOOK ימצא אותו
-        var pingSender = await _supabaseService.CreatePingSenderAsync(
-            phoneId, targetNumber, null, phone.UserId);  // messageId יתעדכן אחרי
-
-        _logger.LogInformation("[PING] Created ping_sender {PsId} before send", pingSender.Id);
-
-        // ── שלב 2: שלח לContainer ────────────────────────────────
-        var client      = _httpClientFactory.CreateClient();
-        client.Timeout  = TimeSpan.FromSeconds(30);
-        var sendRequest = new { jid = request.Jid, text = request.Text ?? "🔔" };
-
-        var response        = await client.PostAsJsonAsync($"{phone.DockerUrl}/send/text", sendRequest);
-        var responseContent = await response.Content.ReadAsStringAsync();
-
-        if (!response.IsSuccessStatusCode)
-            return StatusCode((int)response.StatusCode,
-                System.Text.Json.JsonSerializer.Deserialize<object>(responseContent));
-
-        // ── שלב 3: עדכן ping_sender עם messageId ─────────────────
-        string? whatsappMessageId = null;
-        try
-        {
-            var json = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(responseContent);
-            if (json.TryGetProperty("messageId", out var msgId))
-                whatsappMessageId = msgId.GetString();
-        }
-        catch { }
-
-        if (!string.IsNullOrEmpty(whatsappMessageId))
-        {
-            pingSender.PingMessageId = whatsappMessageId;
-            await _supabaseService.UpdatePingSenderAsync(pingSender);
-            _logger.LogInformation("[PING] Updated ping_sender {PsId} with messageId={MsgId}",
-                pingSender.Id, whatsappMessageId);
-        }
-
-        // ── שלב 4: נסה לקשר contact (WEBHOOK אולי כבר עיבד) ─────
-        var contact = await _supabaseService.GetContactByNumberAsync(phoneId, targetNumber);
-        if (contact != null && pingSender.ContactId == null)
-        {
-            pingSender.ContactId = contact.Id;
-            await _supabaseService.UpdatePingSenderAsync(pingSender);
-            _logger.LogInformation("[PING] Linked ping_sender {PsId} → contact {ContactId}",
-                pingSender.Id, contact.Id);
-        }
-        else if (contact == null)
-        {
-            // Python יקשר contact_id לאחר יצירת ה-contact
-            _logger.LogWarning("[PING] Contact not found yet — Python will link contact_id");
-        }
-
-        return Ok(new
-        {
-            success      = true,
-            pingSenderId = pingSender.Id,
-            messageId    = whatsappMessageId,
-            contactId    = contact?.Id,
-        });
-    }
-    catch (Exception ex)
-    {
-        _logger.LogError(ex, "Error sending PING for phone {PhoneId}", phoneId);
-        return StatusCode(503, new { error = "Container unavailable", details = ex.Message });
-    }
-}
-
-    private async Task<IActionResult> ForwardToContainer(Guid phoneId, string endpoint, object request, string jid, object messageContent)
+    // ── ForwardToContainer — רושם ל-sender_log, לא ל-messages ───────────────
+    private async Task<IActionResult> ForwardToContainer(
+        Guid phoneId, string endpoint, object request,
+        string jid, string messageType, object logContent)
     {
         var phone = await _supabaseService.GetPhoneByIdAsync(phoneId);
         if (phone == null)
             return NotFound(new { error = "Phone not found" });
-
         if (string.IsNullOrEmpty(phone.DockerUrl))
             return BadRequest(new { error = "Container not running", dockerStatus = phone.DockerStatus });
+
+        string? whatsappMessageId = null;
 
         try
         {
             var client = _httpClientFactory.CreateClient();
             client.Timeout = TimeSpan.FromSeconds(30);
-            
-            var response = await client.PostAsJsonAsync($"{phone.DockerUrl}{endpoint}", request);
+
+            var response        = await client.PostAsJsonAsync($"{phone.DockerUrl}{endpoint}", request);
             var responseContent = await response.Content.ReadAsStringAsync();
 
-          if (response.IsSuccessStatusCode)
+            if (response.IsSuccessStatusCode)
             {
-                // Extract messageId from response
-                string? whatsappMessageId = null;
+                // ── חלץ messageId ──────────────────────────────────
                 try
                 {
-                    var jsonResponse = JsonSerializer.Deserialize<JsonElement>(responseContent);
-                    if (jsonResponse.TryGetProperty("messageId", out var msgIdElement))
-                        whatsappMessageId = msgIdElement.GetString();
+                    var json = JsonSerializer.Deserialize<JsonElement>(responseContent);
+                    if (json.TryGetProperty("messageId", out var msgId))
+                        whatsappMessageId = msgId.GetString();
                 }
                 catch { }
 
-                await LogOutgoingMessage(phoneId, phone, jid, messageContent, whatsappMessageId);
-                _logger.LogInformation("Sent message to {Jid} via phone {PhoneId}, messageId: {MessageId}", jid, phoneId, whatsappMessageId);
+                // ✅ רשום ל-sender_log בלבד — messages מנוהל ע"י webhook
+                await _senderLogService.LogAsync(
+                    phoneId, jid, messageType, logContent,
+                    whatsappMessageId: whatsappMessageId);
+
+                _logger.LogInformation(
+                    "[SEND] ✓ type={Type} jid={Jid} msgId={MsgId}",
+                    messageType, jid, whatsappMessageId);
             }
             else
             {
-                _logger.LogWarning("Failed to send message: {Status} - {Response}", response.StatusCode, responseContent);
+                // ✅ רשום כישלון ל-sender_log
+                await _senderLogService.LogAsync(
+                    phoneId, jid, messageType, logContent,
+                    status: "failed",
+                    errorMessage: $"{(int)response.StatusCode}: {responseContent}");
+
+                _logger.LogWarning("[SEND] Failed: {Status}", response.StatusCode);
             }
 
-            return StatusCode((int)response.StatusCode, JsonSerializer.Deserialize<object>(responseContent));
+            return StatusCode((int)response.StatusCode,
+                JsonSerializer.Deserialize<object>(responseContent));
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error sending message for phone {PhoneId}", phoneId);
+            await _senderLogService.LogAsync(
+                phoneId, jid, messageType, logContent,
+                status: "failed", errorMessage: ex.Message);
+
+            _logger.LogError(ex, "[SEND] Error for phone {PhoneId}", phoneId);
             return StatusCode(503, new { error = "Container unavailable", details = ex.Message });
         }
     }
-
-   private async Task LogOutgoingMessage(Guid phoneId, Phone phone, string jid, object content, string? whatsappMessageId)
-    {
-        try
-        {
-            var contactNumber = jid.Split('@')[0];
-            var contact = await _supabaseService.UpsertContactAsync(phoneId, contactNumber);
-            
-           await _supabaseService.AddMessageAsync(
-                    phoneId,
-                    contact.Id,
-                    phone.Number,
-                    content,
-                    direction: false,
-                    leafId: null,
-                    whatsappMessageId: whatsappMessageId
-                );
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error logging outgoing message");
-        }
-    }
 }
 
-// Send DTOs
-public class SendTextRequest
-{
-    public string Jid { get; set; } = string.Empty;
-    public string Text { get; set; } = string.Empty;
-}
-
-public class ButtonItem
-{
-    public string Id { get; set; } = string.Empty;
-    public string Text { get; set; } = string.Empty;
-}
-
-public class SendButtonsRequest
-{
-    public string Jid { get; set; } = string.Empty;
-    public string Text { get; set; } = string.Empty;
-    public string? Footer { get; set; }
-    public List<ButtonItem> Buttons { get; set; } = new();
-}
-
-public class ListRow
-{
-    public string Id { get; set; } = string.Empty;
-    public string Title { get; set; } = string.Empty;
-    public string? Description { get; set; }
-}
-
-public class ListSection
-{
-    public string Title { get; set; } = string.Empty;
-    public List<ListRow> Rows { get; set; } = new();
-}
-
-public class SendListRequest
-{
-    public string Jid { get; set; } = string.Empty;
-    public string Text { get; set; } = string.Empty;
-    public string? Title { get; set; }
-    public string ButtonText { get; set; } = "בחר אפשרות";
-    public string? Footer { get; set; }
-    public List<ListSection> Sections { get; set; } = new();
-}
-
-public class SendButtonResponseRequest
-{
-    public string Jid { get; set; } = string.Empty;
-    public string ButtonId { get; set; } = string.Empty;
-    public string DisplayText { get; set; } = string.Empty;
-}
-
-public class SendListResponseRequest
-{
-    public string Jid { get; set; } = string.Empty;
-    public string RowId { get; set; } = string.Empty;
-    public string? Title { get; set; }
-}
-public class SendPingRequest
-{
-    public string Jid { get; set; } = string.Empty;
-    public string? Text { get; set; }
-}
+// ── DTOs (ללא שינוי) ──────────────────────────────────────────────────────────
+public class SendTextRequest           { public string Jid { get; set; } = ""; public string Text { get; set; } = ""; }
+public class ButtonItem                { public string Id  { get; set; } = ""; public string Text { get; set; } = ""; }
+public class SendButtonsRequest        { public string Jid { get; set; } = ""; public string Text { get; set; } = ""; public string? Footer { get; set; } public List<ButtonItem> Buttons { get; set; } = new(); }
+public class ListRow                   { public string Id { get; set; } = ""; public string Title { get; set; } = ""; public string? Description { get; set; } }
+public class ListSection               { public string Title { get; set; } = ""; public List<ListRow> Rows { get; set; } = new(); }
+public class SendListRequest           { public string Jid { get; set; } = ""; public string Text { get; set; } = ""; public string? Title { get; set; } public string ButtonText { get; set; } = "בחר אפשרות"; public string? Footer { get; set; } public List<ListSection> Sections { get; set; } = new(); }
+public class SendButtonResponseRequest { public string Jid { get; set; } = ""; public string ButtonId { get; set; } = ""; public string DisplayText { get; set; } = ""; }
+public class SendListResponseRequest   { public string Jid { get; set; } = ""; public string RowId { get; set; } = ""; public string? Title { get; set; } }
+public class SendPingRequest           { public string Jid { get; set; } = ""; public string? Text { get; set; } }

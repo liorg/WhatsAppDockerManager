@@ -56,8 +56,9 @@ public interface ISupabaseService
     Task UpdatePhoneCredsAsync(Guid phoneId, string credsBase64);
 
     Task<bool> MessageExistsAsync(string whatsappMessageId);
-    Task<Message> AddMessageAsync(Guid phoneId, Guid contactId, string sender, object content, bool direction,
-     string? leafId = null, string? whatsappMessageId = null);
+   Task<Message> AddMessageAsync(Guid phoneId, Guid contactId, string sender, object content, bool direction,
+ string? leafId = null, string? whatsappMessageId = null, DateTime? whatsappTimestamp = null);
+
 
     // PingSender operations
     Task<PingSender> CreatePingSenderAsync(Guid phoneId, string targetNumber, string? pingMessageId, Guid? userId = null);
@@ -81,6 +82,9 @@ public interface ISupabaseService
 
      Task<int> GetMaxRevisionByNumberAsync(string phoneNumber);
      Task<int> IncrementPhoneRevisionAsync(Guid phoneId);
+
+     Task<SenderLog> AddSenderLogAsync(SenderLog log);
+
     Task<string> GetMaskedUsernameAsync(Guid userId);
 }
 
@@ -114,6 +118,23 @@ public class SupabaseService : ISupabaseService
 
     #region Host Operations
     
+
+    public async Task<SenderLog> AddSenderLogAsync(SenderLog log)
+    {
+        try
+        {
+            var response = await _client.From<SenderLog>().Insert(log);
+            _logger.LogInformation(
+                "[SENDER-LOG] ✓ type={Type} jid={Jid} msgId={MsgId} status={Status}",
+                log.MessageType, log.Jid, log.WhatsappMessageId, log.Status);
+            return response.Models.First();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[SENDER-LOG] Failed to insert for phone {PhoneId}", log.PhoneId);
+            return log; // fallback — לא קורס
+        }
+    }
 public async Task SetPhoneRevisionAsync(Guid phoneId, int revision)
 {
     var phone = await GetPhoneByIdAsync(phoneId);
@@ -1118,13 +1139,12 @@ public async Task<int> IncrementPhoneRevisionAsync(Guid phoneId)
     /// </summary>
     public async Task<Message> AddMessageAsync(
         Guid phoneId, Guid contactId, string sender, object content,
-        bool direction, string? leafId = null, string? whatsappMessageId = null)
+        bool direction, string? leafId = null, string? whatsappMessageId = null,
+        DateTime? whatsappTimestamp = null)   // ← פרמטר חדש
     {
         string contentJson;
-
         try
         {
-            // JsonSerializer מסריאלז JsonElement בתוך Dictionary בצורה נכונה
             contentJson = JsonSerializer.Serialize(content, _jsonOptions);
         }
         catch (Exception ex)
@@ -1132,9 +1152,9 @@ public async Task<int> IncrementPhoneRevisionAsync(Guid phoneId)
             _logger.LogError(ex, "[MSG] Failed to serialize content — falling back to empty object");
             contentJson = "{}";
         }
-
+    
         _logger.LogDebug("[MSG] Saving content: {Content}", contentJson);
-
+    
         var message = new Message
         {
             CallId            = null,
@@ -1146,11 +1166,13 @@ public async Task<int> IncrementPhoneRevisionAsync(Guid phoneId)
             LeafId            = leafId,
             WhatsappMessageId = whatsappMessageId,
             Status            = "sent",
-            RetryCounter      = 0
+            RetryCounter      = 0,
+            SentAt            = whatsappTimestamp ?? DateTime.UtcNow,  // ← timestamp אמיתי מ-WhatsApp
         };
-
+    
         return await CreateMessageAsync(message);
     }
+
 
     #endregion
 
