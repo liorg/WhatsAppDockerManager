@@ -12,6 +12,7 @@ public class UserEmail : BaseModel
     [Column("email")]
     public string? Email { get; set; }
 }
+
 [Table("phones")]
 public class Phone : BaseModel
 {
