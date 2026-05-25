@@ -26,9 +26,9 @@ public class MediaController : ControllerBase
     public IActionResult GetMedia(string phoneId, string messageId)
     {
         // ── מצא את הקובץ — לא יודעים את הextension ─────────────
-        var dir = Path.Combine(_mediaBasePath, phoneId, "media");
-        if (!Directory.Exists(dir))
-            return NotFound(new { error = "Phone media dir not found" });
+           var dir = PhonePathHelper.MediaPath(_mediaBasePath, Guid.Parse(phoneId));
+            if (!Directory.Exists(dir))
+                return NotFound(new { error = "Phone media dir not found" });
 
         // חפש לפי messageId (כל extension)
         var file = Directory.GetFiles(dir, $"{messageId}.*").FirstOrDefault();
