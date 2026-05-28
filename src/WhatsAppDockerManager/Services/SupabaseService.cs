@@ -86,6 +86,12 @@ public interface ISupabaseService
      Task<SenderLog> AddSenderLogAsync(SenderLog log);
 
     Task<string> GetMaskedUsernameAsync(Guid userId);
+
+    Task<List<WebhookRegistration>> GetWebhookRegistrationsAsync(Guid phoneId, Guid contactId);
+    Task<WebhookRegistration> CreateWebhookRegistrationAsync(Guid phoneId, Guid contactId, string callbackUrl, string type = WebhookRegistrationType.Recording);
+    Task DeleteWebhookRegistrationsAsync(Guid phoneId, Guid contactId, string? type = null);
+
+
 }
 
 public class SupabaseService : ISupabaseService
@@ -116,8 +122,13 @@ public class SupabaseService : ISupabaseService
         _client = new Client(url, key, options);
     }
 
-    #region Host Operations
     
+   
+  
+    
+    
+    
+ 
 
     public async Task<SenderLog> AddSenderLogAsync(SenderLog log)
     {
@@ -275,6 +286,76 @@ public async Task<int> IncrementPhoneRevisionAsync(Guid phoneId)
         }
     }
 
+public async Task<List<WebhookRegistration>> GetWebhookRegistrationsAsync(Guid phoneId, Guid contactId)
+{
+    try
+    {
+        var res = await _client.From<WebhookRegistration>()
+            .Where(r => r.PhoneId   == phoneId)
+            .Where(r => r.ContactId == contactId)
+            .Where(r => r.IsActive  == true)
+            .Get();
+        return res.Models;
+    }
+    catch (Exception ex)
+    {
+        _logger.LogError(ex, "[WEBHOOK-REG] Error getting registrations");
+        return new List<WebhookRegistration>();
+    }
+}
+ 
+public async Task<WebhookRegistration> CreateWebhookRegistrationAsync(
+    Guid phoneId, Guid contactId, string callbackUrl,
+    string type = WebhookRegistrationType.Recording)
+{
+    try
+    {
+        // מחק ישנים מאותו type בלבד
+        await DeleteWebhookRegistrationsAsync(phoneId, contactId, type);
+ 
+        var reg = new WebhookRegistration
+        {
+            Id          = Guid.NewGuid(),
+            PhoneId     = phoneId,
+            ContactId   = contactId,
+            CallbackUrl = callbackUrl,
+            Type        = type,
+            IsActive    = true,
+            CreatedAt   = DateTime.UtcNow,
+        };
+        var res = await _client.From<WebhookRegistration>().Insert(reg);
+        _logger.LogInformation("[WEBHOOK-REG] Created type={Type} phone={PhoneId} contact={ContactId}",
+            type, phoneId, contactId);
+        return res.Models.First();
+    }
+    catch (Exception ex)
+    {
+        _logger.LogError(ex, "[WEBHOOK-REG] Error creating registration");
+        throw;
+    }
+}
+ 
+public async Task DeleteWebhookRegistrationsAsync(Guid phoneId, Guid contactId, string? type = null)
+{
+    try
+    {
+        var query = _client.From<WebhookRegistration>()
+            .Where(r => r.PhoneId   == phoneId)
+            .Where(r => r.ContactId == contactId);
+ 
+        // אם type לא צוין — מחק את כולם, אחרת רק את ה-type הספציפי
+        if (!string.IsNullOrEmpty(type))
+            query = query.Where(r => r.Type == type);
+ 
+        await query.Delete();
+    }
+    catch (Exception ex)
+    {
+        _logger.LogError(ex, "[WEBHOOK-REG] Error deleting registrations");
+    }
+}
+ 
+
     public async Task UpdateHostHeartbeatAsync(Guid hostId)
     {
         try
@@ -386,9 +467,9 @@ public async Task<int> IncrementPhoneRevisionAsync(Guid phoneId)
         }
     }
 
-    #endregion
 
-    #region Phone Operations
+
+  
 
     public async Task UpdateAuthSessionAsync(Guid phoneId, string authSessionId)
 {
@@ -768,9 +849,7 @@ public async Task<int> IncrementPhoneRevisionAsync(Guid phoneId)
         }
     }
 
-    #endregion
-
-    #region Contact Operations
+  
 
     public async Task<Contact?> GetContactByIdAsync(Guid contactId)
     {
@@ -1013,9 +1092,7 @@ public async Task<int> IncrementPhoneRevisionAsync(Guid phoneId)
         }
     }
 
-    #endregion
-
-    #region Phone Additional Operations
+    
 
     public async Task UpdatePhoneNumberAsync(Guid phoneId, string phoneNumber)
     {
@@ -1035,9 +1112,7 @@ public async Task<int> IncrementPhoneRevisionAsync(Guid phoneId)
         }
     }
 
-    #endregion
-
-    #region Message Operations
+   
 
     public async Task<Message?> GetMessageByIdAsync(Guid messageId)
     {
@@ -1174,9 +1249,6 @@ public async Task<int> IncrementPhoneRevisionAsync(Guid phoneId)
 
 
 
-    #endregion
-
-    #region Call Operations
 
     public async Task<Call?> GetCallByIdAsync(Guid callId)
     {
@@ -1278,9 +1350,7 @@ public async Task<int> IncrementPhoneRevisionAsync(Guid phoneId)
         }
     }
 
-    #endregion
-
-    #region PingSender Operations
+   
 
     public async Task<PingSender> CreatePingSenderAsync(Guid phoneId, string targetNumber, string? pingMessageId, Guid? userId = null)
     {
@@ -1338,7 +1408,7 @@ public async Task<int> IncrementPhoneRevisionAsync(Guid phoneId)
         _logger.LogInformation("Cleared phone {PhoneId} for logout", phoneId);
     }
 
-    #endregion
+  
 
     public async Task SetPhoneStatusAsync(Guid phoneId, string status)
     {

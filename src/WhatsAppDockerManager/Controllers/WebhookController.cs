@@ -10,6 +10,7 @@ namespace WhatsAppDockerManager.Controllers;
 [Route("api/[controller]")]
 public class WebhookController : ControllerBase
 {
+    private readonly IWebhookDispatcherService _dispatcher;
     private readonly IContainerManager _containerManager;
     private readonly ISupabaseService _supabaseService;
     private readonly ILogger<WebhookController> _logger;
@@ -29,11 +30,14 @@ public class WebhookController : ControllerBase
     public WebhookController(
         IContainerManager containerManager,
         ISupabaseService supabaseService,
-        ILogger<WebhookController> logger)
+        ILogger<WebhookController> logger,
+        IWebhookDispatcherService dispatcher
+        )
     {
         _containerManager = containerManager;
         _supabaseService  = supabaseService;
         _logger           = logger;
+        _dispatcher       = dispatcher;
     }
 
     [HttpPost("container-event/{phoneId}")]
@@ -377,13 +381,24 @@ private async Task SaveMessage(
         ? (contactLid ?? contactNumber)
         : phone.Number ?? contactNumber;
  
-    await _supabaseService.AddMessageAsync(
+    var savedMessage=await _supabaseService.AddMessageAsync(
         phoneId, contact.Id, messageSender, messageContent,
         direction:         isIncoming,
         leafId:            null,
         whatsappMessageId: payload.MessageId,
         whatsappTimestamp: whatsappTimestamp,
-        mediaUrl:          mediaUrl);    // ← חדש
+        mediaUrl:          mediaUrl);    
+    
+        // ── Dispatch ל-webhooks רשומים (background, לא חוסם) ─────────────────
+    _ = Task.Run(async () =>
+    {
+        await _dispatcher.DispatchAsync(
+            phoneId,
+            contact.Id,
+            savedMessage.Id,
+            isIncoming);
+    });
+
 }
 
 
