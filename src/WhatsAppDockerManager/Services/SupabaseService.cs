@@ -87,9 +87,10 @@ public interface ISupabaseService
 
     Task<string> GetMaskedUsernameAsync(Guid userId);
 
-    Task<List<WebhookRegistration>> GetWebhookRegistrationsAsync(Guid phoneId, Guid contactId);
-    Task<WebhookRegistration> CreateWebhookRegistrationAsync(Guid phoneId, Guid contactId, string callbackUrl, string type = WebhookRegistrationType.Recording);
-    Task DeleteWebhookRegistrationsAsync(Guid phoneId, Guid contactId, string? type = null);
+    Task<List<WebhookRegistration>> GetWebhookRegistrationsAsync(string callbackUrl);
+    Task<List<WebhookRegistration>> GetActiveWebhooksByTypeAsync(string type);
+    Task<WebhookRegistration> UpsertWebhookRegistrationAsync(string callbackUrl, string type, string status = "active");
+    Task DeactivateWebhookAsync(string callbackUrl, string? type = null);
 
 
 }
@@ -123,14 +124,7 @@ public class SupabaseService : ISupabaseService
     }
 
     
-   
-  
-    
-    
-    
- 
-
-    public async Task<SenderLog> AddSenderLogAsync(SenderLog log)
+       public async Task<SenderLog> AddSenderLogAsync(SenderLog log)
     {
         try
         {
@@ -178,6 +172,53 @@ public async Task<int> GetMaxRevisionByNumberAsync(string phoneNumber)
         _logger.LogError(ex, "[AUTH] Error getting max revision for {Number}", phoneNumber);
         return 0;
     }
+}
+
+public async Task DeactivateWebhookAsync(string callbackUrl, string? type = null)
+{
+    var query = _client.From<WebhookRegistration>()
+        .Where(r => r.CallbackUrl == callbackUrl);
+
+    if (!string.IsNullOrEmpty(type))
+        query = query.Where(r => r.Type == type);
+
+    // שלוף ועדכן — כי Supabase C# client לא תומך ב-Set ישיר על filter בלי model
+    var res = await query.Get();
+    foreach (var reg in res.Models)
+    {
+        reg.IsActive = false;
+        await _client.From<WebhookRegistration>().Update(reg);
+    }
+}
+public async Task<WebhookRegistration> UpsertWebhookRegistrationAsync(
+    string callbackUrl, string type, string status = "active")
+{
+    // בדוק אם קיים
+    var existing = await _client.From<WebhookRegistration>()
+        .Where(r => r.CallbackUrl == callbackUrl)
+        .Where(r => r.Type == type)
+        .Get();
+
+    var reg = existing.Models.FirstOrDefault();
+    if (reg != null)
+    {
+        reg.IsActive = true;
+        reg.Status   = status;
+        await _client.From<WebhookRegistration>().Update(reg);
+        return reg;
+    }
+
+    reg = new WebhookRegistration
+    {
+        Id          = Guid.NewGuid(),
+        CallbackUrl = callbackUrl,
+        Type        = type,
+        Status      = status,
+        IsActive    = true,
+        CreatedAt   = DateTime.UtcNow,
+    };
+    var res = await _client.From<WebhookRegistration>().Insert(reg);
+    return res.Models.First();
 }
 
 public async Task<string> GetMaskedUsernameAsync(Guid userId)
@@ -286,75 +327,26 @@ public async Task<int> IncrementPhoneRevisionAsync(Guid phoneId)
         }
     }
 
-public async Task<List<WebhookRegistration>> GetWebhookRegistrationsAsync(Guid phoneId, Guid contactId)
-{
-    try
+    public async Task<List<WebhookRegistration>> GetWebhookRegistrationsAsync(string callbackUrl)
     {
         var res = await _client.From<WebhookRegistration>()
-            .Where(r => r.PhoneId   == phoneId)
-            .Where(r => r.ContactId == contactId)
-            .Where(r => r.IsActive  == true)
+            .Where(r => r.CallbackUrl == callbackUrl)
+            .Where(r => r.IsActive == true)
             .Get();
         return res.Models;
     }
-    catch (Exception ex)
+ 
+
+    public async Task<List<WebhookRegistration>> GetActiveWebhooksByTypeAsync(string type)
     {
-        _logger.LogError(ex, "[WEBHOOK-REG] Error getting registrations");
-        return new List<WebhookRegistration>();
+        var res = await _client.From<WebhookRegistration>()
+            .Where(r => r.Type == type)
+            .Where(r => r.IsActive == true)
+            .Get();
+        return res.Models;
     }
-}
- 
-public async Task<WebhookRegistration> CreateWebhookRegistrationAsync(
-    Guid phoneId, Guid contactId, string callbackUrl,
-    string type = WebhookRegistrationType.Recording)
-{
-    try
-    {
-        // מחק ישנים מאותו type בלבד
-        await DeleteWebhookRegistrationsAsync(phoneId, contactId, type);
- 
-        var reg = new WebhookRegistration
-        {
-            Id          = Guid.NewGuid(),
-            PhoneId     = phoneId,
-            ContactId   = contactId,
-            CallbackUrl = callbackUrl,
-            Type        = type,
-            IsActive    = true,
-            CreatedAt   = DateTime.UtcNow,
-        };
-        var res = await _client.From<WebhookRegistration>().Insert(reg);
-        _logger.LogInformation("[WEBHOOK-REG] Created type={Type} phone={PhoneId} contact={ContactId}",
-            type, phoneId, contactId);
-        return res.Models.First();
-    }
-    catch (Exception ex)
-    {
-        _logger.LogError(ex, "[WEBHOOK-REG] Error creating registration");
-        throw;
-    }
-}
- 
-public async Task DeleteWebhookRegistrationsAsync(Guid phoneId, Guid contactId, string? type = null)
-{
-    try
-    {
-        var query = _client.From<WebhookRegistration>()
-            .Where(r => r.PhoneId   == phoneId)
-            .Where(r => r.ContactId == contactId);
- 
-        // אם type לא צוין — מחק את כולם, אחרת רק את ה-type הספציפי
-        if (!string.IsNullOrEmpty(type))
-            query = query.Where(r => r.Type == type);
- 
-        await query.Delete();
-    }
-    catch (Exception ex)
-    {
-        _logger.LogError(ex, "[WEBHOOK-REG] Error deleting registrations");
-    }
-}
- 
+
+
 
     public async Task UpdateHostHeartbeatAsync(Guid hostId)
     {
