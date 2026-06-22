@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using PhoneNumbers;
+using System.Text.Json.Serialization;
 using WhatsAppDockerManager.Models;
 using WhatsAppDockerManager.Services;
 
@@ -153,16 +154,17 @@ public class PhonesController : ControllerBase
             await _supabaseService.UpdatePhoneUserIdAsync(phone.Id, request.UserId.Value);
             phone.UserId = request.UserId.Value;
         }
+
         // ── 3.5 Update use_pairing_code if specified ────────────────
         if (request.UsePairingCode.HasValue && phone.UsePairingCode != request.UsePairingCode.Value)
-         {
-                    _logger.LogInformation("[PROVISION] UsePairingCode | phoneId={PhoneId} → {Value}",
-                        phone.Id, request.UsePairingCode.Value);
-                    await _supabaseService.SetPhoneUsePairingCodeAsync(phone.Id, request.UsePairingCode.Value);
-                    phone.UsePairingCode = request.UsePairingCode.Value;
+        {
+            _logger.LogInformation("[PROVISION] UsePairingCode | phoneId={PhoneId} → {Value}",
+                phone.Id, request.UsePairingCode.Value);
+            await _supabaseService.SetPhoneUsePairingCodeAsync(phone.Id, request.UsePairingCode.Value);
+            phone.UsePairingCode = request.UsePairingCode.Value;
         }
-        // ── 4. Check if container already running ───────────────────
 
+        // ── 4. Check if container already running ───────────────────
         bool containerRunning = false;
         try
         {
@@ -232,7 +234,7 @@ public class PhonesController : ControllerBase
             waStatus = "unavailable";
         }
 
-if (waStatus == "connected")
+        if (waStatus == "connected")
         {
             _logger.LogInformation("[PROVISION] ✓ Done — connected | phoneId={PhoneId}", phone.Id);
             return Ok(new ProvisionResponse
@@ -247,9 +249,20 @@ if (waStatus == "connected")
         // ── 7. Pairing mode או QR mode ──────────────────────────────
         if (phone.UsePairingCode)
         {
-            var freshPhone = await _supabaseService.GetPhoneByIdAsync(phone.Id);
+            // נסה מ-DB (אם webhook הגיע), אחרת שלוף ישירות מהקונטיינר —
+            // זה עוקף את ה-race שבו Baileys מייצר את הקוד לפני שה-webhook נרשם
+            var freshPhone  = await _supabaseService.GetPhoneByIdAsync(phone.Id);
+            var pairingCode = freshPhone?.PairingCode;
+
+            if (string.IsNullOrEmpty(pairingCode))
+            {
+                pairingCode = await GetContainerPairingCode(fastApiPort);
+                _logger.LogInformation("[PROVISION] Pairing code fetched directly | phoneId={PhoneId} hasCode={HasCode}",
+                    phone.Id, !string.IsNullOrEmpty(pairingCode));
+            }
+
             _logger.LogInformation("[PROVISION] ✓ Done — pairing_pending | phoneId={PhoneId} hasCode={HasCode}",
-                phone.Id, !string.IsNullOrEmpty(freshPhone?.PairingCode));
+                phone.Id, !string.IsNullOrEmpty(pairingCode));
 
             return Ok(new ProvisionResponse
             {
@@ -259,10 +272,9 @@ if (waStatus == "connected")
                 Color        = phone.Color,
                 Port         = fastApiPort,
                 Status       = "pairing_pending",
-                PairingCode  = freshPhone?.PairingCode,
+                PairingCode  = pairingCode,
                 QrRefreshUrl = $"/api/phones/{phone.Id}/qrcode",
-                Message      = "Scan the QR code to connect",
-
+                Message      = "Enter the pairing code on your device",
             });
         }
 
@@ -291,7 +303,7 @@ if (waStatus == "connected")
             QrCode       = qrData?.Qr,
             QrImageBase64 = qrData?.QrImageBase64,
             QrRefreshUrl = $"/api/phones/{phone.Id}/qrcode",
-            Message      = "Enter the pairing code on your device",
+            Message      = "Scan the QR code to connect",
         });
     }
 
@@ -301,12 +313,23 @@ if (waStatus == "connected")
         var phone = await _supabaseService.GetPhoneByIdAsync(id);
         if (phone == null) return NotFound(new { error = "Phone not found" });
 
-var (fastApiPort, baileysPort) = PortHashCalculator.GetBothPorts(phone.Id, _configuration);
+        var (fastApiPort, baileysPort) = PortHashCalculator.GetBothPorts(phone.Id, _configuration);
         var waStatus = await GetContainerStatus(fastApiPort);
 
         if (waStatus == "connected")
             return Ok(new { status = "connected", message = "Phone is connected" });
 
+        // ── pairing mode — שלוף את הקוד ישירות מ-Baileys ──
+        if (phone.UsePairingCode)
+        {
+            var code = await GetContainerPairingCode(fastApiPort);
+            if (string.IsNullOrEmpty(code))
+                return StatusCode(503, new { status = "pairing_pending", message = "Pairing code not ready yet" });
+
+            return Ok(new { status = "pairing_ready", pairingCode = code });
+        }
+
+        // ── QR mode — הזרימה הקיימת ──
         var qrData = await GetContainerQr(fastApiPort);
         if (qrData == null)
             return StatusCode(503, new { error = "Container not ready yet", status = waStatus });
@@ -358,6 +381,15 @@ var (fastApiPort, baileysPort) = PortHashCalculator.GetBothPorts(phone.Id, _conf
         if (waStatus == "connected")
             return Ok(new { success = true, status = "connected", message = "Phone resumed and connected" });
 
+        // ── pairing mode ──
+        if (phone.UsePairingCode)
+        {
+            var code = await GetContainerPairingCode(fastApiPort);
+            return Ok(new { success = true, status = "pairing_pending",
+                message = "Phone resumed — enter the pairing code on your device",
+                pairingCode = code, qrRefreshUrl = $"/api/phones/{phoneId}/qrcode" });
+        }
+
         var qrData = await GetContainerQr(fastApiPort);
         return Ok(new { success = true, status = "qr_ready", message = "Phone resumed — scan QR to reconnect", qr = qrData?.Qr, qrImageBase64 = qrData?.QrImageBase64, qrRefreshUrl = $"/api/phones/{phoneId}/qrcode" });
     }
@@ -403,34 +435,49 @@ var (fastApiPort, baileysPort) = PortHashCalculator.GetBothPorts(phone.Id, _conf
         }
         catch { return null; }
     }
+
+    // ── שולף את ה-pairing code ישירות מ-FastAPI/Baileys (עוקף את ה-webhook race) ──
+    private async Task<string?> GetContainerPairingCode(int fastApiPort)
+    {
+        try
+        {
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+            var res = await http.GetFromJsonAsync<ContainerPairingResponse>($"http://localhost:{fastApiPort}/pairing-code");
+            return res?.PairingCode;
+        }
+        catch { return null; }
+    }
 }
 
 // DTOs
 public record ProvisionRequest
 {
-    public Guid?   UserId      { get; init; }
-    public string  PhoneNumber { get; init; } = "";
-    public string? Nickname    { get; init; }
-    public string? Tag         { get; init; }
-    public bool?   UsePairingCode { get; init; }   // ← חדש
-
+    public Guid?   UserId         { get; init; }
+    public string  PhoneNumber    { get; init; } = "";
+    public string? Nickname       { get; init; }
+    public string? Tag            { get; init; }
+    public bool?   UsePairingCode { get; init; }
 }
 
 public record ProvisionResponse
 {
-    public Guid    PhoneId      { get; init; }
-    public string  PhoneNumber  { get; init; } = "";
-    public string? Label        { get; init; }
-    public string? Color        { get; init; }
-    public int     Port         { get; init; }
-    public string  Status       { get; init; } = "";
-    public string? QrCode       { get; init; }
+    public Guid    PhoneId       { get; init; }
+    public string  PhoneNumber   { get; init; } = "";
+    public string? Label         { get; init; }
+    public string? Color         { get; init; }
+    public int     Port          { get; init; }
+    public string  Status        { get; init; } = "";
+    public string? QrCode        { get; init; }
     public string? QrImageBase64 { get; init; }
-    public string? QrRefreshUrl { get; init; }
-    public string? PairingCode   { get; init; }   // ← חדש
-
-    public string  Message      { get; init; } = "";
+    public string? QrRefreshUrl  { get; init; }
+    public string? PairingCode   { get; init; }
+    public string  Message       { get; init; } = "";
 }
 
 record ContainerStatusResponse(string Status);
 record ContainerQrResponse(string? Qr, string? QrImageBase64, string? Status);
+
+// FastAPI מחזיר pairing_code ב-snake_case — JsonPropertyName ממפה אותו נכון
+record ContainerPairingResponse(
+    [property: JsonPropertyName("pairing_code")] string? PairingCode,
+    string? Status);
