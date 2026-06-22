@@ -94,7 +94,7 @@ public interface ISupabaseService
     Task<WebhookRegistration> UpsertWebhookRegistrationAsync(string callbackUrl, string type, string status = "active");
     Task DeactivateWebhookAsync(string callbackUrl, string? type = null);
 
-
+    Task SetPhoneUsePairingCodeAsync(Guid phoneId, bool usePairingCode);
 }
 
 public class SupabaseService : ISupabaseService
@@ -125,7 +125,21 @@ public class SupabaseService : ISupabaseService
         _client = new Client(url, key, options);
     }
 
-    
+    public async Task SetPhoneUsePairingCodeAsync(Guid phoneId, bool usePairingCode)
+{
+    try
+    {
+        await _client.From<Phone>()
+            .Where(p => p.Id == phoneId)
+            .Set(p => p.UsePairingCode, usePairingCode)
+            .Update();
+        _logger.LogInformation("[PAIRING] Phone {PhoneId} use_pairing_code → {Value}", phoneId, usePairingCode);
+    }
+    catch (Exception ex)
+    {
+        _logger.LogError(ex, "[PAIRING] Error setting use_pairing_code for phone {PhoneId}", phoneId);
+    }
+}
        public async Task<SenderLog> AddSenderLogAsync(SenderLog log)
     {
         try
