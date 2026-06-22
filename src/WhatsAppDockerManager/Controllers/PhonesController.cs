@@ -153,7 +153,14 @@ public class PhonesController : ControllerBase
             await _supabaseService.UpdatePhoneUserIdAsync(phone.Id, request.UserId.Value);
             phone.UserId = request.UserId.Value;
         }
-
+        // ── 3.5 Update use_pairing_code if specified ────────────────
+        if (request.UsePairingCode.HasValue && phone.UsePairingCode != request.UsePairingCode.Value)
+         {
+                    _logger.LogInformation("[PROVISION] UsePairingCode | phoneId={PhoneId} → {Value}",
+                        phone.Id, request.UsePairingCode.Value);
+                    await _supabaseService.SetPhoneUsePairingCodeAsync(phone.Id, request.UsePairingCode.Value);
+                    phone.UsePairingCode = request.UsePairingCode.Value;
+        }
         // ── 4. Check if container already running ───────────────────
 
         bool containerRunning = false;
@@ -284,7 +291,7 @@ if (waStatus == "connected")
             QrCode       = qrData?.Qr,
             QrImageBase64 = qrData?.QrImageBase64,
             QrRefreshUrl = $"/api/phones/{phone.Id}/qrcode",
-             Message      = "Scan the QR code to connect",
+            Message      = "Enter the pairing code on your device",
         });
     }
 
@@ -405,6 +412,8 @@ public record ProvisionRequest
     public string  PhoneNumber { get; init; } = "";
     public string? Nickname    { get; init; }
     public string? Tag         { get; init; }
+    public bool?   UsePairingCode { get; init; }   // ← חדש
+
 }
 
 public record ProvisionResponse
