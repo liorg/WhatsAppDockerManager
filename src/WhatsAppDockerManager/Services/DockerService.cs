@@ -172,15 +172,16 @@ public class DockerService : IDockerService, IDisposable
                     Image = _dockerSettings.ImageName,
                     Name  = containerName,
                     Env   = new List<string>
-                    {
-                        $"TZ={_dockerSettings.Timezone}",
-                        $"PHONE_NUMBER={phone.Number}",
-                        $"PHONE_ID={phone.Id}",
-                        $"REDIS_URL=redis://{RedisContainerName}:6379",
-                        $"AUTH_REVISION={authRevision}",
-                        $"USER_DISPLAY={maskedUsername}",  
-                        $"MANAGER_URL={ManagerUrl}",   
-                    },
+                        {
+                            $"TZ={_dockerSettings.Timezone}",
+                            $"PHONE_NUMBER={phone.Number}",
+                            $"PHONE_ID={phone.Id}",
+                            $"REDIS_URL=redis://{RedisContainerName}:6379",
+                            $"AUTH_REVISION={authRevision}",
+                            $"USER_DISPLAY={maskedUsername}",  
+                            $"MANAGER_URL={ManagerUrl}",
+                            $"USE_PAIRING_CODE={(phone.UsePairingCode ? "true" : "false")}",   // ← הוסף
+                        },
                     ExposedPorts = new Dictionary<string, EmptyStruct>
                     {
                         { "8000/tcp", default },
