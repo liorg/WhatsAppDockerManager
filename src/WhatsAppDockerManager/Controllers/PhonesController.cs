@@ -225,7 +225,7 @@ public class PhonesController : ControllerBase
             waStatus = "unavailable";
         }
 
-        if (waStatus == "connected")
+if (waStatus == "connected")
         {
             _logger.LogInformation("[PROVISION] ✓ Done — connected | phoneId={PhoneId}", phone.Id);
             return Ok(new ProvisionResponse
@@ -237,7 +237,29 @@ public class PhonesController : ControllerBase
             });
         }
 
-        // ── 7. Get QR ───────────────────────────────────────────────
+        // ── 7. Pairing mode או QR mode ──────────────────────────────
+        if (phone.UsePairingCode)
+        {
+            var freshPhone = await _supabaseService.GetPhoneByIdAsync(phone.Id);
+            _logger.LogInformation("[PROVISION] ✓ Done — pairing_pending | phoneId={PhoneId} hasCode={HasCode}",
+                phone.Id, !string.IsNullOrEmpty(freshPhone?.PairingCode));
+
+            return Ok(new ProvisionResponse
+            {
+                PhoneId      = phone.Id,
+                PhoneNumber  = normalizedPhone!,
+                Label        = phone.Label,
+                Color        = phone.Color,
+                Port         = fastApiPort,
+                Status       = "pairing_pending",
+                PairingCode  = freshPhone?.PairingCode,
+                QrRefreshUrl = $"/api/phones/{phone.Id}/qrcode",
+                Message      = "Scan the QR code to connect",
+
+            });
+        }
+
+        // ── QR mode — הזרימה הקיימת ────────────────────────────────
         ContainerQrResponse? qrData = null;
         try
         {
@@ -253,12 +275,16 @@ public class PhonesController : ControllerBase
         _logger.LogInformation("[PROVISION] ✓ Done — qr_ready | phoneId={PhoneId}", phone.Id);
         return Ok(new ProvisionResponse
         {
-            PhoneId = phone.Id, PhoneNumber = normalizedPhone!,
-            Label = phone.Label, Color = phone.Color,
-            Port = fastApiPort, Status = "qr_ready",
-            QrCode = qrData?.Qr, QrImageBase64 = qrData?.QrImageBase64,
+            PhoneId      = phone.Id,
+            PhoneNumber  = normalizedPhone!,
+            Label        = phone.Label,
+            Color        = phone.Color,
+            Port         = fastApiPort,
+            Status       = "qr_ready",
+            QrCode       = qrData?.Qr,
+            QrImageBase64 = qrData?.QrImageBase64,
             QrRefreshUrl = $"/api/phones/{phone.Id}/qrcode",
-            Message = "Scan the QR code to connect",
+             Message      = "Scan the QR code to connect",
         });
     }
 
@@ -392,6 +418,8 @@ public record ProvisionResponse
     public string? QrCode       { get; init; }
     public string? QrImageBase64 { get; init; }
     public string? QrRefreshUrl { get; init; }
+    public string? PairingCode   { get; init; }   // ← חדש
+
     public string  Message      { get; init; } = "";
 }
 
