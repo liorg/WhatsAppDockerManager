@@ -68,10 +68,15 @@ public int AuthRevision { get; set; } = 0;
     public string? CredsBase64 { get; set; }
 
     [Column("auth_session_id")]
-public string? AuthSessionId { get; set; }
+   public string? AuthSessionId { get; set; }
 
     [Column("created_at")]
     public DateTime CreatedAt { get; set; }
+
+    [Column("pairing_code")]        public string?   PairingCode       { get; set; }
+    [Column("pairing_code_expiry")] public DateTime? PairingCodeExpiry { get; set; }
+    [Column("use_pairing_code")]    public bool      UsePairingCode    { get; set; }
+    [Column("creds_updated_at")]    public DateTime? CredsUpdatedAt    { get; set; }
 }
 
 public static class PhoneDockerStatus
