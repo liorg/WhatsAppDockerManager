@@ -54,6 +54,8 @@ public interface ISupabaseService
     Task<Call> UpdateCallAsync(Call call);
 
     Task UpdatePhoneCredsAsync(Guid phoneId, string credsBase64);
+    Task UpdatePhonePairingCodeAsync(Guid phoneId, string pairingCode);   // ← חדש
+    Task ClearPairingCodeAsync(Guid phoneId);                              // ← חדש
 
     Task<bool> MessageExistsAsync(string whatsappMessageId);
    Task<Message> AddMessageAsync(Guid phoneId, Guid contactId, string sender, object content, bool direction,
@@ -1324,24 +1326,58 @@ public async Task<int> IncrementPhoneRevisionAsync(Guid phoneId)
         }
     }
 
-    public async Task UpdatePhoneCredsAsync(Guid phoneId, string credsBase64)
+  public async Task UpdatePhoneCredsAsync(Guid phoneId, string credsBase64)
+{
+    try
     {
-        try
+        var phone = await GetPhoneByIdAsync(phoneId);
+        if (phone != null)
         {
-            var phone = await GetPhoneByIdAsync(phoneId);
-            if (phone != null)
-            {
-                phone.CredsBase64 = credsBase64;
-                await _client.From<Phone>().Update(phone);
-                _logger.LogInformation("Updated phone {PhoneId} creds_base64 (length: {Length})", phoneId, credsBase64.Length);
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error updating phone {PhoneId} creds", phoneId);
+            phone.CredsBase64    = credsBase64;
+            phone.CredsUpdatedAt = DateTime.UtcNow;   // ← השורה החדשה
+            await _client.From<Phone>().Update(phone);
+            _logger.LogInformation("Updated phone {PhoneId} creds_base64 (length: {Length})", phoneId, credsBase64.Length);
         }
     }
+    catch (Exception ex)
+    {
+        _logger.LogError(ex, "Error updating phone {PhoneId} creds", phoneId);
+    }
+}
+public async Task UpdatePhonePairingCodeAsync(Guid phoneId, string pairingCode)
+{
+    try
+    {
+        var expiry = DateTime.UtcNow.AddMinutes(3);
+        await _client.From<Phone>()
+            .Where(p => p.Id == phoneId)
+            .Set(p => p.PairingCode!, pairingCode)
+            .Set(p => p.PairingCodeExpiry!, expiry)
+            .Update();
+        _logger.LogInformation("[PAIRING] Phone {PhoneId} pairing code set (expires {Expiry})", phoneId, expiry);
+    }
+    catch (Exception ex)
+    {
+        _logger.LogError(ex, "[PAIRING] Error setting pairing code for phone {PhoneId}", phoneId);
+    }
+}
 
+public async Task ClearPairingCodeAsync(Guid phoneId)
+{
+    try
+    {
+        await _client.From<Phone>()
+            .Where(p => p.Id == phoneId)
+            .Set(p => p.PairingCode!, (string?)null)
+            .Set(p => p.PairingCodeExpiry!, (DateTime?)null)
+            .Update();
+        _logger.LogInformation("[PAIRING] Cleared pairing code for phone {PhoneId}", phoneId);
+    }
+    catch (Exception ex)
+    {
+        _logger.LogError(ex, "[PAIRING] Error clearing pairing code for phone {PhoneId}", phoneId);
+    }
+}
    
 
     public async Task<PingSender> CreatePingSenderAsync(Guid phoneId, string targetNumber, string? pingMessageId, Guid? userId = null)
