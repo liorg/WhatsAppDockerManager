@@ -59,6 +59,12 @@ public class WebhookController : ControllerBase
                 _logger.LogWarning("RAW-PAYLOAD] Phone {PhoneId} disconnected", phoneId);
                 await _supabaseService.UpdatePhoneDockerStatusAsync(phoneId, PhoneDockerStatus.Error, errorMessage: "WhatsApp disconnected");
                 break;
+          case "pairing_code":                                                        // ← הוסף את כל הבלוק הזה
+                _logger.LogInformation("[PAIRING] Phone {PhoneId} pairing code ready", phoneId);
+                if (!string.IsNullOrEmpty(payload.PairingCode))
+                    await _supabaseService.UpdatePhonePairingCodeAsync(phoneId, payload.PairingCode);
+                await _supabaseService.UpdatePhoneDockerStatusAsync(phoneId, PhoneDockerStatus.Pending);
+                break;
             case "qr":
                 _logger.LogInformation("RAW-PAYLOAD] Phone {PhoneId} waiting for QR scan", phoneId);
                 await _supabaseService.UpdatePhoneDockerStatusAsync(phoneId, PhoneDockerStatus.Pending);
@@ -141,6 +147,7 @@ private async Task HandleAuthenticated(Guid phoneId, Phone phone, ContainerEvent
         await _supabaseService.SetPhoneStatusAsync(phoneId, "active");
         await _supabaseService.UpdatePhoneDockerStatusAsync(phoneId, PhoneDockerStatus.Running);
         await _supabaseService.UpdatePhoneNumberAsync(phoneId, number);
+        await _supabaseService.ClearPairingCodeAsync(phoneId);   // ← הוסף
 
         // ── השבת את כל שאר הphones עם אותו מספר ────────────────────
         var allSameNumber = await _supabaseService.GetPhonesByNumberAsync(number);
@@ -425,9 +432,8 @@ public class ContainerEventPayload
     [JsonPropertyName("phone")]        public string? Phone        { get; set; }
     [JsonPropertyName("name")]         public string? Name           { get; set; }
     [JsonPropertyName("creds_b64")]    public string? CredsB64       { get; set; }
-    [JsonPropertyName("authRevision")] public int?    AuthRevision   { get; set; } 
+    [JsonPropertyName("authRevision")] public int?    AuthRevision   { get; set; }
     [JsonPropertyName("phoneId")]      public Guid?   PayloadPhoneId { get; set; }
-    [JsonPropertyName("userDisplay")]   public string? UserDisplay   { get; set; }
-
-    
+    [JsonPropertyName("userDisplay")]  public string? UserDisplay   { get; set; }
+    [JsonPropertyName("pairingCode")]  public string? PairingCode   { get; set; }   // ← הוסף שורה זו
 }
