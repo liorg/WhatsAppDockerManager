@@ -183,7 +183,7 @@ public class PhonesController : ControllerBase
         if (!containerRunning)
         {
             // ── phone חדש → QR נקי (לא נוגע ב-phone של משתמש אחר) ──
-            if (isNew)
+             if (isNew || phone.UsePairingCode)
             {
                 _logger.LogInformation("[PROVISION] New phone — clearing own creds for fresh QR | phoneId={PhoneId}", phone.Id);
                 var basePath = _configuration["AppSettings:Docker:DataBasePath"] ?? "/opt/whatsapp-data";
@@ -396,7 +396,7 @@ public class PhonesController : ControllerBase
         var qrData = await GetContainerQr(fastApiPort);
         return Ok(new { success = true, status = "qr_ready", message = "Phone resumed — scan QR to reconnect", qr = qrData?.Qr, qrImageBase64 = qrData?.QrImageBase64, qrRefreshUrl = $"/api/phones/{phoneId}/qrcode" });
     }
-  [HttpPost("{id:guid}/pairing-code/refresh")]
+[HttpPost("{id:guid}/pairing-code/refresh")]
     public async Task<IActionResult> RefreshPairingCode(Guid id)
     {
         var phone = await _supabaseService.GetPhoneByIdAsync(id);
@@ -405,15 +405,13 @@ public class PhonesController : ControllerBase
             return BadRequest(new { error = "Phone is not in pairing mode" });
 
         var (fastApiPort, _) = PortHashCalculator.GetBothPorts(phone.Id, _configuration);
-
-        // ── בדוק אם ה-socket חי ──
         var waStatus = await GetContainerStatus(fastApiPort);
 
-        // אם מחובר — אין טעם ב-refresh
+        // ── כבר מחובר — אין טעם ב-refresh ──
         if (waStatus == "connected")
             return Ok(new { status = "connected", message = "Phone already connected" });
 
-        // ── נסה refresh ישיר (socket חי) ──
+        // ── socket חי (pairing/qr) — נסה refresh ישיר מהיר ──
         if (waStatus == "pairing_ready" || waStatus == "qr_ready")
         {
             try
@@ -421,38 +419,57 @@ public class PhonesController : ControllerBase
                 using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
                 var res = await http.PostAsync($"http://localhost:{fastApiPort}/pairing-code/refresh", null);
                 var rawBody = await res.Content.ReadAsStringAsync();
-                _logger.LogInformation("[PAIRING] Refresh response | status={Status} body={Body}", res.StatusCode, rawBody);
+                _logger.LogInformation("[PAIRING] Direct refresh | status={Status} body={Body}", res.StatusCode, rawBody);
 
                 if (res.IsSuccessStatusCode)
                 {
-                    var body = await System.Text.Json.JsonSerializer.DeserializeAsync<ContainerPairingResponse>(
-                        await res.Content.ReadAsStreamAsync());
-                    var c = body?.PairingCode;
-                    if (!string.IsNullOrEmpty(c))
-                        await _supabaseService.UpdatePhonePairingCodeAsync(phone.Id, c);
-                    return Ok(new { status = "pairing_ready", pairingCode = c });
+                    var code = await GetContainerPairingCode(fastApiPort);
+                    if (!string.IsNullOrEmpty(code))
+                        await _supabaseService.UpdatePhonePairingCodeAsync(phone.Id, code);
+                    return Ok(new { status = "pairing_ready", pairingCode = code, message = "Pairing code refreshed" });
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "[PAIRING] Direct refresh failed, will restart container");
+                _logger.LogWarning(ex, "[PAIRING] Direct refresh failed — will clean & restart");
             }
         }
 
-        // ── ה-socket מת (401/disconnected) — restart הקונטיינר ──
-        _logger.LogInformation("[PAIRING] Socket dead (status={Status}) — restarting container for fresh code", waStatus);
+        // ── socket מת (401/disconnected) — נקה creds ועשה restart ──
+        // הניקוי קריטי: בלי זה הקונטיינר יקום, ינסה login עם creds ישנים, ויקבל 401 שוב
+        _logger.LogInformation("[PAIRING] Socket dead (status={Status}) — clearing creds + restart", waStatus);
+
+        try
+        {
+            // 1. מחק את ה-auth directory על ה-host
+            var basePath = _configuration["AppSettings:Docker:DataBasePath"] ?? "/opt/whatsapp-data";
+            PhonePathHelper.DeleteDirectories(basePath, phone.Id);
+
+            // 2. נקה creds ו-pairing code מה-DB
+            phone.CredsBase64 = null;
+            await _supabaseService.ClearPhoneCredsAsync(phone.Id);
+            await _supabaseService.ClearPairingCodeAsync(phone.Id);
+
+            _logger.LogInformation("[PAIRING] Creds cleared | phoneId={PhoneId}", phone.Id);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[PAIRING] Failed clearing creds for phone {PhoneId}", phone.Id);
+        }
+
+        // 3. restart הקונטיינר — יקום עם auth נקי ויבקש pairing code חדש
         var restarted = await _containerManager.RestartPhoneContainerAsync(phone);
         if (!restarted)
             return StatusCode(500, new { error = "Failed to restart container" });
 
-        // חכה שה-socket יעלה ויבקש קוד חדש
-        await Task.Delay(5000);
-        var freshCode = await GetContainerPairingCode(fastApiPort);
-        if (!string.IsNullOrEmpty(freshCode))
-            await _supabaseService.UpdatePhonePairingCodeAsync(phone.Id, freshCode);
-
-        return Ok(new { status = "pairing_pending", pairingCode = freshCode,
-            message = "Container restarted — new pairing code generated" });
+        // 4. חזור מיד — ה-UI יעשה polling ל-/pairing-code עד שהקוד החדש מוכן
+        return Ok(new
+        {
+            status       = "pairing_pending",
+            pairingCode  = (string?)null,
+            message      = "Creds cleared & container restarting — poll /pairing-code for the new code",
+            pollUrl      = $"/api/phones/{phone.Id}/pairing-code"
+        });
     }
     // ── Private helpers ────────────────────────────────────────────────
 
