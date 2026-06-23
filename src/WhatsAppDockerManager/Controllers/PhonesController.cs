@@ -88,7 +88,7 @@ public class PhonesController : ControllerBase
     // ══════════════════════════════════════════════════════════════════
     // Provision — upsert לפי number + user_id
     // ══════════════════════════════════════════════════════════════════
-  [HttpPost("provision")]
+    [HttpPost("provision")]
     public async Task<IActionResult> Provision([FromBody] ProvisionRequest request)
     {
         if (string.IsNullOrWhiteSpace(request.PhoneNumber))
@@ -178,7 +178,20 @@ public class PhonesController : ControllerBase
             _logger.LogWarning(ex, "[PROVISION] Container check failed | containerId={ContainerId} — assuming not running",
                 phone.ContainerId);
         }
+        // ── 4.5 אלץ restart אם הלקוח שולח usePairingCode על טלפון רץ-לא-מחובר ──
+        if (containerRunning && request.UsePairingCode.HasValue)
+        {
+            var liveStatus = await GetContainerStatus(fastApiPort);
 
+            // אם לא מחובר — נאתחל כדי להחיל את המצב החדש (QR/pairing)
+            // אם כבר מחובר — לא נוגעים (לא רוצים לנתק session פעיל)
+            if (liveStatus != "connected")
+            {
+                _logger.LogInformation("[PROVISION] Mode set on running-but-not-connected container — forcing restart | phoneId={PhoneId} mode={Mode}",
+                    phone.Id, request.UsePairingCode.Value ? "pairing" : "qr");
+                containerRunning = false;
+            }
+        }
         // ── 5. Start container if needed ────────────────────────────
         if (!containerRunning)
         {
