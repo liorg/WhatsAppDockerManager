@@ -259,6 +259,9 @@ public class PhonesController : ControllerBase
                 pairingCode = await GetContainerPairingCode(fastApiPort);
                 _logger.LogInformation("[PROVISION] Pairing code fetched directly | phoneId={PhoneId} hasCode={HasCode}",
                     phone.Id, !string.IsNullOrEmpty(pairingCode));
+
+                if (!string.IsNullOrEmpty(pairingCode))
+                    await _supabaseService.UpdatePhonePairingCodeAsync(phone.Id, pairingCode);
             }
 
             _logger.LogInformation("[PROVISION] ✓ Done — pairing_pending | phoneId={PhoneId} hasCode={HasCode}",
@@ -393,7 +396,37 @@ public class PhonesController : ControllerBase
         var qrData = await GetContainerQr(fastApiPort);
         return Ok(new { success = true, status = "qr_ready", message = "Phone resumed — scan QR to reconnect", qr = qrData?.Qr, qrImageBase64 = qrData?.QrImageBase64, qrRefreshUrl = $"/api/phones/{phoneId}/qrcode" });
     }
+    [HttpPost("{id:guid}/pairing-code/refresh")]
+    public async Task<IActionResult> RefreshPairingCode(Guid id)
+    {
+        var phone = await _supabaseService.GetPhoneByIdAsync(id);
+        if (phone == null) return NotFound(new { error = "Phone not found" });
+        if (!phone.UsePairingCode)
+            return BadRequest(new { error = "Phone is not in pairing mode" });
 
+        var (fastApiPort, _) = PortHashCalculator.GetBothPorts(phone.Id, _configuration);
+
+        try
+        {
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+            var res = await http.PostAsync($"http://localhost:{fastApiPort}/pairing-code/refresh", null);
+            if (!res.IsSuccessStatusCode)
+                return StatusCode(503, new { error = "Could not refresh pairing code", status = "pairing_pending" });
+
+            var body = await res.Content.ReadFromJsonAsync<ContainerPairingResponse>();
+            var code = body?.PairingCode;
+
+            if (!string.IsNullOrEmpty(code))
+                await _supabaseService.UpdatePhonePairingCodeAsync(phone.Id, code);
+
+            return Ok(new { status = "pairing_ready", pairingCode = code });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[PAIRING] Refresh failed for phone {PhoneId}", id);
+            return StatusCode(500, new { error = ex.Message });
+        }
+    }
     // ── Private helpers ────────────────────────────────────────────────
 
     private static (bool isValid, string? error, string? normalized) ValidateAndNormalizePhone(string phone)
