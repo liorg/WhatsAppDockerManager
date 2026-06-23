@@ -396,7 +396,7 @@ public class PhonesController : ControllerBase
         var qrData = await GetContainerQr(fastApiPort);
         return Ok(new { success = true, status = "qr_ready", message = "Phone resumed — scan QR to reconnect", qr = qrData?.Qr, qrImageBase64 = qrData?.QrImageBase64, qrRefreshUrl = $"/api/phones/{phoneId}/qrcode" });
     }
-    [HttpPost("{id:guid}/pairing-code/refresh")]
+  [HttpPost("{id:guid}/pairing-code/refresh")]
     public async Task<IActionResult> RefreshPairingCode(Guid id)
     {
         var phone = await _supabaseService.GetPhoneByIdAsync(id);
@@ -406,26 +406,53 @@ public class PhonesController : ControllerBase
 
         var (fastApiPort, _) = PortHashCalculator.GetBothPorts(phone.Id, _configuration);
 
-        try
+        // ── בדוק אם ה-socket חי ──
+        var waStatus = await GetContainerStatus(fastApiPort);
+
+        // אם מחובר — אין טעם ב-refresh
+        if (waStatus == "connected")
+            return Ok(new { status = "connected", message = "Phone already connected" });
+
+        // ── נסה refresh ישיר (socket חי) ──
+        if (waStatus == "pairing_ready" || waStatus == "qr_ready")
         {
-            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
-            var res = await http.PostAsync($"http://localhost:{fastApiPort}/pairing-code/refresh", null);
-            if (!res.IsSuccessStatusCode)
-                return StatusCode(503, new { error = "Could not refresh pairing code", status = "pairing_pending" });
+            try
+            {
+                using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+                var res = await http.PostAsync($"http://localhost:{fastApiPort}/pairing-code/refresh", null);
+                var rawBody = await res.Content.ReadAsStringAsync();
+                _logger.LogInformation("[PAIRING] Refresh response | status={Status} body={Body}", res.StatusCode, rawBody);
 
-            var body = await res.Content.ReadFromJsonAsync<ContainerPairingResponse>();
-            var code = body?.PairingCode;
-
-            if (!string.IsNullOrEmpty(code))
-                await _supabaseService.UpdatePhonePairingCodeAsync(phone.Id, code);
-
-            return Ok(new { status = "pairing_ready", pairingCode = code });
+                if (res.IsSuccessStatusCode)
+                {
+                    var body = await System.Text.Json.JsonSerializer.DeserializeAsync<ContainerPairingResponse>(
+                        await res.Content.ReadAsStreamAsync());
+                    var c = body?.PairingCode;
+                    if (!string.IsNullOrEmpty(c))
+                        await _supabaseService.UpdatePhonePairingCodeAsync(phone.Id, c);
+                    return Ok(new { status = "pairing_ready", pairingCode = c });
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[PAIRING] Direct refresh failed, will restart container");
+            }
         }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "[PAIRING] Refresh failed for phone {PhoneId}", id);
-            return StatusCode(500, new { error = ex.Message });
-        }
+
+        // ── ה-socket מת (401/disconnected) — restart הקונטיינר ──
+        _logger.LogInformation("[PAIRING] Socket dead (status={Status}) — restarting container for fresh code", waStatus);
+        var restarted = await _containerManager.RestartPhoneContainerAsync(phone);
+        if (!restarted)
+            return StatusCode(500, new { error = "Failed to restart container" });
+
+        // חכה שה-socket יעלה ויבקש קוד חדש
+        await Task.Delay(5000);
+        var freshCode = await GetContainerPairingCode(fastApiPort);
+        if (!string.IsNullOrEmpty(freshCode))
+            await _supabaseService.UpdatePhonePairingCodeAsync(phone.Id, freshCode);
+
+        return Ok(new { status = "pairing_pending", pairingCode = freshCode,
+            message = "Container restarted — new pairing code generated" });
     }
     // ── Private helpers ────────────────────────────────────────────────
 
