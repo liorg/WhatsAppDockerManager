@@ -50,6 +50,22 @@ public class WebhookController : ControllerBase
         if (phone == null)
             return NotFound(new { error = "Phone not found" });
 
+
+        // ← תיעוד גנרי — כל event עם MessageId נכתב אוטומטית ל-message_events
+        if (!string.IsNullOrEmpty(payload.MessageId))
+        {
+            await _supabaseService.InsertMessageEventAsync(
+                whatsappMessageId: payload.MessageId,
+                phoneId:           phoneId,
+                jid:               payload.Jid,
+                eventType:         payload.Event ?? "unknown",
+                statusCode:        payload.Status,
+                errorCode:         payload.ErrorCode,
+                errorMessage:      payload.ErrorMessage,
+                rawPayload:        payload);
+        }
+
+
         switch (payload.Event)
         {
             case "authenticated":
@@ -70,9 +86,9 @@ public class WebhookController : ControllerBase
                 await _supabaseService.UpdatePhoneDockerStatusAsync(phoneId, PhoneDockerStatus.Pending);
                 break;
                 case "message_status":
-    _logger.LogInformation("[STATUS] Phone {PhoneId} message {MessageId} status={Status}", 
-        phoneId, payload.MessageId, payload.Status);
-    await _supabaseService.UpdateMessageStatusAsync(payload.MessageId, payload.Status);
+                _logger.LogInformation("[STATUS] Phone {PhoneId} message {MessageId} status={Status}", 
+                    phoneId, payload.MessageId, payload.Status);
+                 await _supabaseService.UpdateMessageStatusAsync(payload.MessageId, payload.Status);
     break;
             case "message":
                 await HandleIncomingMessage(phoneId, phone, payload);
@@ -441,6 +457,7 @@ public class ContainerEventPayload
     [JsonPropertyName("phoneId")]      public Guid?   PayloadPhoneId { get; set; }
     [JsonPropertyName("userDisplay")]  public string? UserDisplay   { get; set; }
     [JsonPropertyName("pairingCode")]  public string? PairingCode   { get; set; }   
-
     [JsonPropertyName("status")]       public int?    Status         { get; set; }
+    [JsonPropertyName("errorCode")]    public string? ErrorCode    { get; set; }
+    [JsonPropertyName("errorMessage")] public string? ErrorMessage { get; set; }
 }

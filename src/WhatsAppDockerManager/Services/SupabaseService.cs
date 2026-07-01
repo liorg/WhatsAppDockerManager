@@ -97,6 +97,15 @@ public interface ISupabaseService
     Task SetPhoneUsePairingCodeAsync(Guid phoneId, bool usePairingCode);
 
     Task UpdateMessageStatusAsync(string whatsappMessageId, int? statusCode);
+
+    Task InsertMessageEventAsync(
+    string whatsappMessageId,
+    Guid? phoneId,
+    string? jid,
+    string eventType,
+    int? statusCode = null,
+    string? errorCode = null,
+    string? errorMessage = null,object? rawPayload = null);
 }
 
 public class SupabaseService : ISupabaseService
@@ -1162,6 +1171,34 @@ public async Task<int> IncrementPhoneRevisionAsync(Guid phoneId)
             return new List<Message>();
         }
     }
+    public async Task InsertMessageEventAsync(
+    string whatsappMessageId,
+    Guid? phoneId,
+    string? jid,
+    string eventType,
+    int? statusCode = null,
+    string? errorCode = null,
+    string? errorMessage = null,
+    object? rawPayload = null)
+{
+    if (string.IsNullOrEmpty(whatsappMessageId)) return;
+
+    var evt = new MessageEvent
+    {
+        WhatsappMessageId = whatsappMessageId,
+        PhoneId           = phoneId,
+        Jid               = jid,
+        EventType         = eventType,
+        StatusCode        = statusCode,
+        ErrorCode         = errorCode,
+        ErrorMessage      = errorMessage,
+        RawPayload        = rawPayload != null
+            ? System.Text.Json.JsonSerializer.Serialize(rawPayload)
+            : null,
+    };
+
+    await _client.From<MessageEvent>().Insert(evt);
+}
   public async Task UpdateMessageStatusAsync(string whatsappMessageId, int? statusCode)
 {
     if (string.IsNullOrEmpty(whatsappMessageId) || statusCode == null) return;
