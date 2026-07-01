@@ -1163,26 +1163,26 @@ public async Task<int> IncrementPhoneRevisionAsync(Guid phoneId)
         }
     }
   public async Task UpdateMessageStatusAsync(string whatsappMessageId, int? statusCode)
+{
+    if (string.IsNullOrEmpty(whatsappMessageId) || statusCode == null) return;
+
+    var status = statusCode switch
     {
-        if (string.IsNullOrEmpty(whatsappMessageId) || statusCode == null) return;
+        0 => "failed",
+        1 => "pending",
+        2 => "sent",
+        3 => "delivered",
+        4 => "read",
+        5 => "played",
+        _ => "pending"
+    };
 
-        var status = statusCode switch
-        {
-            0 => "failed",
-            1 => "pending",
-            2 => "sent",
-            3 => "delivered",
-            4 => "read",
-            5 => "played",
-            _ => "pending"
-        };
-
-        await _client
-            .From<Message>()
-            .Where(m => m.WhatsappMessageId == whatsappMessageId)
-            .Set(m => m.Status, status)
-            .Update();
-    }
+    await _client
+        .From<Message>()
+        .Where(m => m.WhatsappMessageId == whatsappMessageId)
+        .Set(m => m.Status, status)
+        .Update();
+}
     public async Task<List<Message>> GetMessagesForCallAsync(Guid callId, int limit = 100)
     {
         try
