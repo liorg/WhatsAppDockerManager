@@ -69,6 +69,11 @@ public class WebhookController : ControllerBase
                 _logger.LogInformation("RAW-PAYLOAD] Phone {PhoneId} waiting for QR scan", phoneId);
                 await _supabaseService.UpdatePhoneDockerStatusAsync(phoneId, PhoneDockerStatus.Pending);
                 break;
+                case "message_status":
+    _logger.LogInformation("[STATUS] Phone {PhoneId} message {MessageId} status={Status}", 
+        phoneId, payload.MessageId, payload.Status);
+    await _supabaseService.UpdateMessageStatusAsync(payload.MessageId, payload.Status);
+    break;
             case "message":
                 await HandleIncomingMessage(phoneId, phone, payload);
                 break;
@@ -435,5 +440,7 @@ public class ContainerEventPayload
     [JsonPropertyName("authRevision")] public int?    AuthRevision   { get; set; }
     [JsonPropertyName("phoneId")]      public Guid?   PayloadPhoneId { get; set; }
     [JsonPropertyName("userDisplay")]  public string? UserDisplay   { get; set; }
-    [JsonPropertyName("pairingCode")]  public string? PairingCode   { get; set; }   // ← הוסף שורה זו
+    [JsonPropertyName("pairingCode")]  public string? PairingCode   { get; set; }   
+
+    [JsonPropertyName("status")]       public int?    Status         { get; set; }
 }

@@ -7977,7 +7977,7 @@
     "/home/lior/.nuget/packages/": {}
   },
   "project": {
-    "version": "1.0.183",
+    "version": "1.0.196",
     "restore": {
       "projectUniqueName": "/home/lior/projects/github/WhatsAppDockerManager/src/WhatsAppDockerManager/WhatsAppDockerManager.csproj",
       "projectName": "WhatsAppDockerManager",
@@ -8074,7 +8074,7 @@
             "privateAssets": "all"
           }
         },
-        "runtimeIdentifierGraphPath": "/usr/lib/dotnet/sdk/8.0.127/PortableRuntimeIdentifierGraph.json"
+        "runtimeIdentifierGraphPath": "/usr/lib/dotnet/sdk/8.0.128/PortableRuntimeIdentifierGraph.json"
       }
     }
   }
