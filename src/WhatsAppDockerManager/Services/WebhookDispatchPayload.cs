@@ -10,12 +10,19 @@ public class WebhookDispatchPayload
     public string MessageId { get; set; } = "";
     public string PhoneId   { get; set; } = "";
     public string ContactId { get; set; } = "";
+
+    /// <summary>
+    /// מזהה ההודעה המקורי של WhatsApp.
+    /// </summary>
+    public string WhatsAppMessageId { get; set; } = "";
     public bool   Direction { get; set; }
 }
 
 public interface IWebhookDispatcherService
 {
-    Task DispatchAsync(Guid phoneId, Guid contactId, Guid messageId, bool direction);
+    Task DispatchAsync(Guid phoneId, Guid contactId, Guid messageId, 
+                       string whatsAppMessageId,
+                       bool direction);
 }
 
 public class WebhookDispatcherService : IWebhookDispatcherService
@@ -34,7 +41,9 @@ public class WebhookDispatcherService : IWebhookDispatcherService
         _logger      = logger;
     }
 
-    public async Task DispatchAsync(Guid phoneId, Guid contactId, Guid messageId, bool direction)
+    public async Task DispatchAsync(Guid phoneId, Guid contactId, Guid messageId, 
+    string whatsAppMessageId,
+    bool direction)
     {
         try
         {
@@ -48,6 +57,7 @@ public class WebhookDispatcherService : IWebhookDispatcherService
                 PhoneId   = phoneId.ToString(),
                 ContactId = contactId.ToString(),
                 Direction = direction,
+                WhatsAppMessageId= whatsAppMessageId
             });
 
             var http = _httpFactory.CreateClient();
