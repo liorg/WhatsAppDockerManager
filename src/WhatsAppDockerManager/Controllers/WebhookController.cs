@@ -424,6 +424,7 @@ private async Task SaveMessage(
             phoneId,
             contact.Id,
             savedMessage.Id,
+            payload.MessageId,
             isIncoming);
     });
 
