@@ -286,9 +286,18 @@ private async Task HandleAuthenticated(Guid phoneId, Phone phone, ContainerEvent
             // ══════════════════════════════════════════════════════
             if (!isIncoming)
             {
-                var outContact = await _supabaseService.GetContactByNumberAsync(phoneId, contactNumber)
-                              ?? await _supabaseService.GetContactByLidAsync(phoneId, contactNumber);
+            //    var outContact = await _supabaseService.GetContactByNumberAsync(phoneId, contactNumber)
+                   //           ?? await _supabaseService.GetContactByLidAsync(phoneId, contactNumber);
 
+
+                 // LID מגיע לפעמים עם דומיין s.whatsapp.net ולא @lid, ואז
+                // contactNumber מכיל LID. חיפוש לפי number קודם תופס drafts
+                // ישנים שה-number שלהם הוא בעצם LID — ומנציח את הכפילות.
+                var outContact = await _supabaseService.GetContactByLidAsync(phoneId, contactNumber)
+                              ?? await _supabaseService.GetContactByNumberAsync(phoneId, contactNumber);
+
+
+                   
                 if (outContact == null)
                 {
                     _logger.LogInformation("[PING-OUT] No contact for {Number} — creating draft", contactNumber);
