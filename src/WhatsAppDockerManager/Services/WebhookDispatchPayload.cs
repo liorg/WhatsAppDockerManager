@@ -2,20 +2,17 @@
 using System.Text;
 using System.Text.Json;
 using WhatsAppDockerManager.Models;
+using System.Text.Json.Serialization;   // ← להוסיף למעלה
 
 namespace WhatsAppDockerManager.Services;
 
 public class WebhookDispatchPayload
 {
-    public string MessageId { get; set; } = "";
-    public string PhoneId   { get; set; } = "";
-    public string ContactId { get; set; } = "";
-
-    /// <summary>
-    /// מזהה ההודעה המקורי של WhatsApp.
-    /// </summary>
-    public string WhatsAppMessageId { get; set; } = "";
-    public bool   Direction { get; set; }
+    [JsonPropertyName("messageId")]         public string MessageId { get; set; } = "";
+    [JsonPropertyName("phoneId")]           public string PhoneId   { get; set; } = "";
+    [JsonPropertyName("contactId")]         public string ContactId { get; set; } = "";
+    [JsonPropertyName("whatsAppMessageId")] public string WhatsAppMessageId { get; set; } = "";
+    [JsonPropertyName("direction")]         public bool   Direction { get; set; }
 }
 
 public interface IWebhookDispatcherService
