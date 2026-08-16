@@ -25,7 +25,22 @@ public class SendController : ControllerBase
         _httpClientFactory = httpClientFactory;
         _logger            = logger;
     }
+    // ── Send image ──────────────────────────────────────────────────────────────
+    [HttpPost("image")]
+    public async Task<IActionResult> SendImage(Guid phoneId, [FromBody] SendImageRequest request)
+    {
+        return await ForwardToContainer(phoneId, "/send/image", request, request.Jid,
+            "image", new { caption = request.Caption, mimetype = request.Mimetype });
+    }
 
+    // ── Send sticker ────────────────────────────────────────────────────────────
+    [HttpPost("sticker")]
+    public async Task<IActionResult> SendSticker(Guid phoneId, [FromBody] SendStickerRequest request)
+    {
+        return await ForwardToContainer(phoneId, "/send/sticker", request, request.Jid,
+            "sticker", new { });
+    }
+    
     // ── Send text ─────────────────────────────────────────────────────────────
     [HttpPost("text")]
     public async Task<IActionResult> SendText(Guid phoneId, [FromBody] SendTextRequest request)
