@@ -299,3 +299,16 @@ public class SendListRequest           { public string Jid { get; set; } = ""; p
 public class SendButtonResponseRequest { public string Jid { get; set; } = ""; public string ButtonId { get; set; } = ""; public string DisplayText { get; set; } = ""; }
 public class SendListResponseRequest   { public string Jid { get; set; } = ""; public string RowId { get; set; } = ""; public string? Title { get; set; } }
 public class SendPingRequest           { public string Jid { get; set; } = ""; public string? Text { get; set; } }
+public class SendImageRequest
+{
+    public string Jid { get; set; } = "";
+    public string Image { get; set; } = "";
+    public string? Caption { get; set; }
+    public string? Mimetype { get; set; } = "image/jpeg";
+}
+
+public class SendStickerRequest
+{
+    public string Jid { get; set; } = "";
+    public string Sticker { get; set; } = "";
+}
