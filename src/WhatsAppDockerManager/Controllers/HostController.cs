@@ -22,6 +22,57 @@ public class HostController : ControllerBase
         _logger = logger;
     }
 
+    /// <summary>
+    /// משאבי המערכת כפי שנכתבו בפעימה האחרונה.
+    /// לא דוגם מחדש — CPU מחושב כדלתא ע"י לולאת ה-heartbeat.
+    /// </summary>
+    [HttpGet("heartbeat")]
+    public async Task<IActionResult> GetHeartbeat([FromQuery] int staleAfterSeconds = 90)
+    {
+        if (!_containerManager.CurrentHostId.HasValue)
+            return StatusCode(503, new { error = "Host not initialized" });
+
+        var host = await _supabaseService.GetHostByIdAsync(_containerManager.CurrentHostId.Value);
+        if (host == null)
+            return NotFound(new { error = "Host not found in database" });
+
+        var secondsSince = (DateTime.UtcNow - host.LastHeartbeat).TotalSeconds;
+
+        return Ok(new
+        {
+            hostId        = host.Id,
+            hostName      = host.HostName,
+            status        = host.Status,
+            lastHeartbeat = host.LastHeartbeat,
+            secondsSince  = Math.Round(secondsSince),
+            isStale       = secondsSince > staleAfterSeconds,
+
+            cpu = new
+            {
+                percent = host.CpuPercent
+            },
+
+            ram = new
+            {
+                totalMb = host.RamTotalMb,
+                usedMb  = host.RamUsedMb,
+                percent = Percent(host.RamUsedMb, host.RamTotalMb)
+            },
+
+            disk = new
+            {
+                totalGb = host.DiskTotalGb,
+                usedGb  = host.DiskUsedGb,
+                percent = Percent(host.DiskUsedGb, host.DiskTotalGb)
+            },
+
+            phoneCount     = host.PhoneCount,
+            containerCount = host.ContainerCount,
+            maxContainers  = host.MaxContainers,
+            capacityPercent = Percent(host.PhoneCount, host.MaxContainers)
+        });
+    }
+
     [HttpGet("status")]
     public async Task<IActionResult> GetStatus()
     {
@@ -41,29 +92,46 @@ public class HostController : ControllerBase
             lastHeartbeat    = host?.LastHeartbeat,
             activeContainers = phones.Count(p => p.DockerStatus == PhoneDockerStatus.Running),
             totalPhones      = phones.Count,
-            maxContainers    = host?.MaxContainers
+            maxContainers    = host?.MaxContainers,
+
+            cpuPercent       = host?.CpuPercent,
+            ramTotalMb       = host?.RamTotalMb,
+            ramUsedMb        = host?.RamUsedMb,
+            diskTotalGb      = host?.DiskTotalGb,
+            diskUsedGb       = host?.DiskUsedGb,
+            containerCount   = host?.ContainerCount
         });
     }
 
     [HttpGet("all")]
-public async Task<IActionResult> GetAllHosts()
-{
-    var hosts = await _supabaseService.GetActiveHostsAsync();
-    
-    return Ok(hosts.Select(h => new
+    public async Task<IActionResult> GetAllHosts()
     {
-        id             = h.Id,
-        hostName       = h.HostName,
-        ipAddress      = h.IpAddress,
-        externalIp     = h.ExternalIp,
-        status         = h.Status,
-        lastHeartbeat  = h.LastHeartbeat,
-        maxContainers  = h.MaxContainers,
-        portRangeStart = h.PortRangeStart,
-        portRangeEnd   = h.PortRangeEnd,
-        createdAt      = h.CreatedAt
-    }));
-}
+        var hosts = await _supabaseService.GetActiveHostsAsync();
+
+        return Ok(hosts.Select(h => new
+        {
+            id             = h.Id,
+            hostName       = h.HostName,
+            ipAddress      = h.IpAddress,
+            externalIp     = h.ExternalIp,
+            status         = h.Status,
+            lastHeartbeat  = h.LastHeartbeat,
+            maxContainers  = h.MaxContainers,
+            portRangeStart = h.PortRangeStart,
+            portRangeEnd   = h.PortRangeEnd,
+            createdAt      = h.CreatedAt,
+
+            cpuPercent     = h.CpuPercent,
+            ramTotalMb     = h.RamTotalMb,
+            ramUsedMb      = h.RamUsedMb,
+            ramPercent     = Percent(h.RamUsedMb, h.RamTotalMb),
+            diskTotalGb    = h.DiskTotalGb,
+            diskUsedGb     = h.DiskUsedGb,
+            diskPercent    = Percent(h.DiskUsedGb, h.DiskTotalGb),
+            phoneCount     = h.PhoneCount,
+            containerCount = h.ContainerCount
+        }));
+    }
 
     [HttpPost("sync")]
     public async Task<IActionResult> TriggerSync()
@@ -144,4 +212,10 @@ public async Task<IActionResult> GetAllHosts()
     {
         return Ok(new { status = "healthy", timestamp = DateTime.UtcNow });
     }
+
+    // ── helper ──────────────────────────────────────────────────────────────
+    private static double? Percent(int? used, int? total)
+        => (total is > 0 && used is not null)
+            ? Math.Round(used.Value * 100.0 / total.Value, 1)
+            : null;
 }
