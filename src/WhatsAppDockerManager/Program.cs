@@ -30,6 +30,8 @@ builder.Services.AddSingleton<IDockerService, DockerService>();
 builder.Services.AddSingleton<IContainerManager, ContainerManager>();
 builder.Services.AddSingleton<OrphanContainerCleanupService>();
 builder.Services.AddSingleton<IWebhookDispatcherService, WebhookDispatcherService>();
+builder.Services.AddHostedService<HeartbeatService>();
+
 
 builder.Services.AddHttpClient();
 
