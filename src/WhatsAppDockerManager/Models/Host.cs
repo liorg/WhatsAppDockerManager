@@ -36,6 +36,29 @@ public class Host : BaseModel
     [Column("created_at")]
     public DateTime CreatedAt { get; set; }
 
+// ── משאבי מערכת (מתעדכן בכל heartbeat) ──────────────────────────────────
+
+    [Column("cpu_percent")]
+    public double? CpuPercent { get; set; }
+
+    [Column("ram_total_mb")]
+    public int? RamTotalMb { get; set; }
+
+    [Column("ram_used_mb")]
+    public int? RamUsedMb { get; set; }
+
+    [Column("disk_total_gb")]
+    public int? DiskTotalGb { get; set; }
+
+    [Column("disk_used_gb")]
+    public int? DiskUsedGb { get; set; }
+
+    [Column("phone_count")]
+    public int? PhoneCount { get; set; }
+
+    [Column("container_count")]
+    public int? ContainerCount { get; set; }
+
     [Column("updated_at")]
     public DateTime UpdatedAt { get; set; }
 }
