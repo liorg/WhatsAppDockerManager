@@ -10,8 +10,8 @@ public interface ISupabaseService
     // Host operations
     Task<DbHost?> GetOrCreateHostAsync(string hostName, string ipAddress, string? externalIp, int portRangeStart, int portRangeEnd, int maxContainers);
    // Task UpdateHostHeartbeatAsync(Guid hostId);
-   -    Task UpdateHostHeartbeatAsync(Guid hostId);
-+    Task UpdateHostHeartbeatAsync(Guid hostId, HostMetrics? metrics = null);
+  // -    Task UpdateHostHeartbeatAsync(Guid hostId);
+  Task UpdateHostHeartbeatAsync(Guid hostId, HostMetrics? metrics = null);
     
     Task<List<DbHost>> GetActiveHostsAsync();
     Task<DbHost?> GetHostByIdAsync(Guid hostId);
