@@ -9,7 +9,10 @@ public interface ISupabaseService
 {
     // Host operations
     Task<DbHost?> GetOrCreateHostAsync(string hostName, string ipAddress, string? externalIp, int portRangeStart, int portRangeEnd, int maxContainers);
-    Task UpdateHostHeartbeatAsync(Guid hostId);
+   // Task UpdateHostHeartbeatAsync(Guid hostId);
+   -    Task UpdateHostHeartbeatAsync(Guid hostId);
++    Task UpdateHostHeartbeatAsync(Guid hostId, HostMetrics? metrics = null);
+    
     Task<List<DbHost>> GetActiveHostsAsync();
     Task<DbHost?> GetHostByIdAsync(Guid hostId);
     Task SetHostStatusAsync(Guid hostId, string status);
@@ -373,7 +376,7 @@ public async Task<int> IncrementPhoneRevisionAsync(Guid phoneId)
         return res.Models;
     }
 
-
+/*
 
     public async Task UpdateHostHeartbeatAsync(Guid hostId)
     {
@@ -385,6 +388,38 @@ public async Task<int> IncrementPhoneRevisionAsync(Guid phoneId)
                 host.LastHeartbeat = DateTime.UtcNow;
                 await _client.From<DbHost>().Update(host);
             }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error updating heartbeat for host {HostId}", hostId);
+        }
+    }
+*/
+public async Task UpdateHostHeartbeatAsync(Guid hostId, HostMetrics? metrics = null)
+    {
+        try
+        {
+            var host = await GetHostByIdAsync(hostId);
+            if (host == null) return;
+
+            host.LastHeartbeat = DateTime.UtcNow;
+
+            if (metrics != null)
+            {
+                // null ממטריקה = לא הצלחנו לקרוא ⇒ משאירים את הערך הקודם
+                host.CpuPercent     = metrics.CpuPercent     ?? host.CpuPercent;
+                host.RamTotalMb     = metrics.RamTotalMb     ?? host.RamTotalMb;
+                host.RamUsedMb      = metrics.RamUsedMb      ?? host.RamUsedMb;
+                host.DiskTotalGb    = metrics.DiskTotalGb    ?? host.DiskTotalGb;
+                host.DiskUsedGb     = metrics.DiskUsedGb     ?? host.DiskUsedGb;
+                host.ContainerCount = metrics.ContainerCount ?? host.ContainerCount;
+
+                // phone_count מגיע מה-DB, לא מ-/proc
+                var phones = await GetPhonesForHostAsync(hostId);
+                host.PhoneCount = phones.Count;
+            }
+
+            await _client.From<DbHost>().Update(host);
         }
         catch (Exception ex)
         {
