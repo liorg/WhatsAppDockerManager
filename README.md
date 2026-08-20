@@ -280,6 +280,13 @@ export AppSettings__Host__HostName="host-2"
 export AppSettings__Host__ExternalIp="5.6.7.8"
 dotnet run
 ```
+
+
+```bash
+sudo systemctl restart whatsapp-manager
+
+```
+
 LINK:
 
 http://localhost:5000/swagger/index.html
