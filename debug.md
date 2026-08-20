@@ -118,3 +118,25 @@ sudo /opt/myapp/update.sh
 GIT
 
 update version WhatsAppDockerManager.csproj git add WhatsAppDockerManager.csproj git add README.md git add Services git add Controllers git status git add Controllers git commit --m 'vers 18' git push
+
+
+
+
+
+# אימות שהקובץ הגיע שלם
+wc -l ~/index.js                    # 856
+grep -c currentSock ~/index.js      # 14
+grep APP_VERSION ~/index.js | head -1   # 1.0.0.33
+
+# גיבוי
+docker exec whatsapp_972504476645_3beff8fa \
+  cp /app/baileys/src/index.js /app/baileys/src/index.js.bak33
+
+# העתקה + אימות תחביר לפני restart
+docker cp ~/index.js whatsapp_972504476645_3beff8fa:/app/baileys/src/index.js
+docker exec whatsapp_972504476645_3beff8fa node --check /app/baileys/src/index.js && echo SYNTAX_OK
+
+# רק אם SYNTAX_OK
+docker restart whatsapp_972504476645_3beff8fa
+sleep 15
+curl -m 5 localhost:9369/version || docker logs --tail 30 whatsapp_972504476645_3beff8fa
