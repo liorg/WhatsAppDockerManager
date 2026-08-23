@@ -140,3 +140,39 @@ docker exec whatsapp_972504476645_3beff8fa node --check /app/baileys/src/index.j
 docker restart whatsapp_972504476645_3beff8fa
 sleep 15
 curl -m 5 localhost:9369/version || docker logs --tail 30 whatsapp_972504476645_3beff8fa
+
+
+
+
+
+כמעט — אבל בסדר הפוך. קודם tail -f, ורק אחר כך restart.
+
+אם תעשה restart קודם, תשחרר את התור ותאבד את הראיה. הרגע התקוע הוא הרגע היקר.
+
+הסדר בפעם הבאה:
+
+bash
+# 1. תצפית ראשונה — לפני שנוגעים בכלום
+docker exec whatsapp_972504476645_3beff8fa tail -f /var/log/baileys.log | grep -E "recv xml|UPSERT|decrypt|SOCK"
+
+# 2. תשלח הודעה מהטלפון ותראה מה מופיע
+מה רואים	מסקנה	פעולה
+רק ping/pong	וואטסאפ לא מנתב	restart — ותדע שזה הפתרון היחיד
+<message> בלי UPSERT fired	Baileys בולע	אל תעשה restart — תסתכל על decrypt
+UPSERT fired + FAILED	Redis/Spine	הבעיה לא כאן בכלל
+
+רק אחרי שראית — restart.
+
+ושווה לצלם שני נתונים לפני ה-restart, הם לא ישרדו:
+
+bash
+docker exec whatsapp_972504476645_3beff8fa ss -tin 'dport = :443' | grep -oE "sport|bytes_received:[0-9]*|lastrcv:[0-9]*"
+docker exec whatsapp_972504476645_3beff8fa awk '/new socket created/{n=0} /Timed Out/{n++} END{print n}' /var/log/baileys.log
+
+וטיפ חשוב לפני restart: נסה קודם לשלוח הודעה יוצאת:
+
+bash
+curl -X POST localhost:9369/send/text -H 'Content-Type: application/json' \
+  -d '{"jid":"972546252491","text":"wake"}'
+
+אם התור משתחרר מיד אחרי — יש לך עקיפה שלא דורשת restart בכלל, ואפשר להפוך אותה לאוטומטית (heartbeat יוצא כל X דקות). זה שווה הרבה יותר מ-restart ידני.
