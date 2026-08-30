@@ -101,14 +101,10 @@ public interface ISupabaseService
 
     Task UpdateMessageStatusAsync(string whatsappMessageId, int? statusCode);
 
-    Task InsertMessageEventAsync(
-    string whatsappMessageId,
-    Guid? phoneId,
-    string? jid,
-    string eventType,
-    int? statusCode = null,
-    string? errorCode = null,
-    string? errorMessage = null,object? rawPayload = null);
+    Task InsertMessageEventAsync(string whatsappMessageId, Guid? phoneId,string? jid, string eventType, int? statusCode = null, string? errorCode = null,string? errorMessage = null,object? rawPayload = null);
+    Task<PhoneTemplate?> GetTemplateAsync(Guid phoneId, string name, string? lang);
+    Task<PhoneTemplate?> GetTemplateByIdAsync(Guid phoneId, Guid templateId);
+
 }
 
 public class SupabaseService : ISupabaseService
@@ -1636,4 +1632,63 @@ public async Task<List<Phone>> GetPhonesByNumberAsync(string phoneNumber)
             return new List<Phone>();
         }
     }
+    public async Task<PhoneTemplate?> GetTemplateAsync(Guid phoneId, string name, string? lang)
+    {
+        try
+        {
+            // שני ענפים ולא query מצטבר — נמנע מחיכוך טיפוסים
+            // בין ISupabaseTable ל-IPostgrestTable בהשמה חוזרת.
+            if (!string.IsNullOrWhiteSpace(lang))
+            {
+                var withLang = await _client.From<PhoneTemplate>()
+                    .Where(t => t.PhoneId == phoneId)
+                    .Where(t => t.Name == name)
+                    .Where(t => t.Lang == lang)
+                    .Get();
+ 
+                var hit = withLang.Models.FirstOrDefault();
+                if (hit != null) return hit;
+ 
+                // אין התאמה לשפה המבוקשת — נופלים לכל שפה שקיימת לאותו שם,
+                // כדי שקריאה בלי lang תמיד תמצא משהו.
+            }
+ 
+            var response = await _client.From<PhoneTemplate>()
+                .Where(t => t.PhoneId == phoneId)
+                .Where(t => t.Name == name)
+                .Get();
+ 
+            return response.Models.FirstOrDefault();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error getting template {Name}/{Lang} for phone {PhoneId}",
+                name, lang, phoneId);
+            return null;
+        }
+    }
+ 
+    public async Task<PhoneTemplate?> GetTemplateByIdAsync(Guid phoneId, Guid templateId)
+    {
+        try
+        {
+            var response = await _client.From<PhoneTemplate>()
+                .Where(t => t.Id == templateId)
+                .Where(t => t.PhoneId == phoneId)
+                .Get();
+ 
+            return response.Models.FirstOrDefault();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error getting template {TemplateId} for phone {PhoneId}",
+                templateId, phoneId);
+            return null;
+        }
+    }
+
+
+
+
+    
 }
