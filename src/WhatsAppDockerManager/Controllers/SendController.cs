@@ -287,7 +287,7 @@ public class SendController : ControllerBase
             return StatusCode(503, new { error = "Container unavailable", details = ex.Message });
         }
     }
-}
+
 
 // ════════════════════════════════════════════════════════════════════════════
 // Controllers/SendController.cs — POST /api/phones/{phoneId}/send/template
