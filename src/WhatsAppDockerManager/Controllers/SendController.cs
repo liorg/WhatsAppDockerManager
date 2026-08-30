@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Mvc;
 using WhatsAppDockerManager.Models;
 using WhatsAppDockerManager.Services;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace WhatsAppDockerManager.Controllers;
 
@@ -10,13 +11,13 @@ namespace WhatsAppDockerManager.Controllers;
 public class SendController : ControllerBase
 {
     private readonly ISupabaseService   _supabaseService;
-    private readonly ISenderLogService  _senderLogService;   // ← חדש
+    private readonly ISenderLogService  _senderLogService;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<SendController> _logger;
 
     public SendController(
         ISupabaseService   supabaseService,
-        ISenderLogService  senderLogService,               // ← inject
+        ISenderLogService  senderLogService,
         IHttpClientFactory httpClientFactory,
         ILogger<SendController> logger)
     {
@@ -25,6 +26,7 @@ public class SendController : ControllerBase
         _httpClientFactory = httpClientFactory;
         _logger            = logger;
     }
+
     // ── Send image ──────────────────────────────────────────────────────────────
     [HttpPost("image")]
     public async Task<IActionResult> SendImage(Guid phoneId, [FromBody] SendImageRequest request)
@@ -40,13 +42,165 @@ public class SendController : ControllerBase
         return await ForwardToContainer(phoneId, "/send/sticker", request, request.Jid,
             "sticker", new { });
     }
-    
+
     // ── Send text ─────────────────────────────────────────────────────────────
     [HttpPost("text")]
     public async Task<IActionResult> SendText(Guid phoneId, [FromBody] SendTextRequest request)
     {
         return await ForwardToContainer(phoneId, "/send/text", request, request.Jid,
             "text", new { text = request.Text });
+    }
+
+    // ── Send template ─────────────────────────────────────────────────────────
+    // המקום היחיד בשרשרת שמחולל את טקסט ההודעה.
+    // ה-Worker וה-Spine מעבירים שם תבנית + פרמטרים as-is.
+    [HttpPost("template")]
+    public async Task<IActionResult> SendTemplate(Guid phoneId, [FromBody] SendTemplateRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.Jid))
+            return BadRequest(new { error = "jid is required" });
+        if (string.IsNullOrWhiteSpace(request.Name) && !request.TemplateId.HasValue)
+            return BadRequest(new { error = "name or templateId is required" });
+
+        var phone = await _supabaseService.GetPhoneByIdAsync(phoneId);
+        if (phone == null)
+            return NotFound(new { error = "Phone not found" });
+        if (string.IsNullOrEmpty(phone.DockerUrl))
+            return BadRequest(new { error = "Container not running", dockerStatus = phone.DockerStatus });
+
+        var provider = string.IsNullOrWhiteSpace(phone.Provider) ? "baileys" : phone.Provider;
+
+        // מסלול Cloud API עדיין לא קיים — נכשל מפורשות ולא בשקט.
+        if (provider != "baileys")
+            return StatusCode(501, new { error = "Template send is implemented for baileys only", provider });
+
+        // ── שליפת התבנית ──────────────────────────────────────────────────────
+        var lang = string.IsNullOrWhiteSpace(request.Lang) ? phone.Lang : request.Lang;
+
+        var template = request.TemplateId.HasValue
+            ? await _supabaseService.GetTemplateByIdAsync(phoneId, request.TemplateId.Value)
+            : await _supabaseService.GetTemplateAsync(phoneId, request.Name, lang);
+
+        if (template == null)
+            return NotFound(new { error = "Template not found", name = request.Name, lang });
+
+        if (template.Status != "approved")
+            return Conflict(new { error = "Template is not approved", status = template.Status });
+        if (!template.IsPublished)
+            return Conflict(new { error = "Template is not published", name = template.Name });
+
+        var content = template.Content;
+        if (content?.Body == null || string.IsNullOrWhiteSpace(content.Body.Text))
+            return BadRequest(new { error = "Template has no BODY" });
+
+        // ── פרמטרים ───────────────────────────────────────────────────────────
+        // params מובנה { header:[], body:[] }, או bodyParams שטוח כשאין HEADER.
+        var pars = request.Params ?? new Dictionary<string, List<string>>();
+        if (request.BodyParams is { Count: > 0 } && !pars.ContainsKey("body"))
+            pars["body"] = request.BodyParams;
+
+        var headerVals = pars.TryGetValue("header", out var hv) ? hv : new List<string>();
+        var bodyVals   = pars.TryGetValue("body",   out var bv) ? bv : new List<string>();
+
+        var headerFmt = content.Header?.Format ?? "none";
+
+        if (headerFmt is "image" or "video" or "document")
+        {
+            return BadRequest(new
+            {
+                error  = "Media header is not supported on baileys template send",
+                format = headerFmt,
+            });
+        }
+
+        var headerText = headerFmt == "text" ? (content.Header?.Text ?? "") : "";
+
+        var needHeader = MaxParamIndex(headerText);
+        var needBody   = MaxParamIndex(content.Body.Text);
+
+        if (headerVals.Count < needHeader || bodyVals.Count < needBody)
+        {
+            return BadRequest(new
+            {
+                error    = "Missing template parameters",
+                required = new { header = needHeader, body = needBody },
+                supplied = new { header = headerVals.Count, body = bodyVals.Count },
+            });
+        }
+
+        // ── רינדור ────────────────────────────────────────────────────────────
+        var lines = new List<string>();
+        if (!string.IsNullOrWhiteSpace(headerText))
+            lines.Add(FillParams(headerText, headerVals));
+
+        lines.Add(FillParams(content.Body.Text, bodyVals));
+
+        var footer   = content.Footer?.Text;
+        var bodyOnly = string.Join("\n", lines);
+        var fullText = string.IsNullOrWhiteSpace(footer) ? bodyOnly : $"{bodyOnly}\n{footer}";
+
+        _logger.LogInformation(
+            "[TEMPLATE] {Name}/{Lang} -> {Jid} | params h={H} b={B} len={Len}",
+            template.Name, template.Lang, request.Jid,
+            headerVals.Count, bodyVals.Count, fullText.Length);
+
+        // ── שליחה לקונטיינר דרך ForwardToContainer ────────────────────────────
+        // כך מקבלים sender_log, חילוץ messageId וטיפול שגיאות בחינם.
+        // תבנית עם quick_reply → /send/buttons, אחרת הכפתורים נעלמים.
+        var buttons = (content.Buttons ?? new List<TemplateButton>())
+            .Where(x => !string.IsNullOrWhiteSpace(x.Text))
+            .Select((x, i) => new ButtonItem { Id = $"btn_{i + 1}", Text = x.Text! })
+            .ToList();
+
+        if (buttons.Count > 0)
+        {
+            var btnReq = new SendButtonsRequest
+            {
+                Jid     = request.Jid,
+                Text    = bodyOnly,
+                Footer  = footer,
+                Buttons = buttons,
+            };
+
+            return await ForwardToContainer(phoneId, "/send/buttons", btnReq, request.Jid,
+                "template",
+                new { template = template.Name, lang = template.Lang, text = bodyOnly, footer, buttons });
+        }
+
+        var txtReq = new SendTextRequest { Jid = request.Jid, Text = fullText };
+
+        return await ForwardToContainer(phoneId, "/send/text", txtReq, request.Jid,
+            "template",
+            new { template = template.Name, lang = template.Lang, text = fullText });
+    }
+
+    // ── עזרי תבנית ────────────────────────────────────────────────────────────
+
+    private static readonly Regex ParamRe =
+        new(@"\{\{\s*(\d+)\s*\}\}", RegexOptions.Compiled);
+
+    /// <summary>המספר הגבוה ביותר שמופיע כ-{{n}} — כמה ערכים נדרשים לרכיב.</summary>
+    private static int MaxParamIndex(string? text)
+    {
+        if (string.IsNullOrEmpty(text)) return 0;
+
+        var max = 0;
+        foreach (Match m in ParamRe.Matches(text))
+        {
+            if (int.TryParse(m.Groups[1].Value, out var n) && n > max)
+                max = n;
+        }
+
+        return max;
+    }
+
+    private static string FillParams(string? text, List<string> values)
+    {
+        return ParamRe.Replace(text ?? "", m =>
+        {
+            var idx = int.Parse(m.Groups[1].Value) - 1;
+            return idx >= 0 && idx < values.Count ? values[idx] ?? "" : "";
+        });
     }
 
     // ── Send buttons ──────────────────────────────────────────────────────────
@@ -287,167 +441,33 @@ public class SendController : ControllerBase
             return StatusCode(503, new { error = "Container unavailable", details = ex.Message });
         }
     }
+}
 
 
-// ════════════════════════════════════════════════════════════════════════════
-// Controllers/SendController.cs — POST /api/phones/{phoneId}/send/template
-//
-// זהו המקום היחיד בשרשרת שמחולל את טקסט ההודעה.
-// ה-Worker וה-Spine מעבירים שם תבנית + פרמטרים as-is.
-// ════════════════════════════════════════════════════════════════════════════
+// ── DTOs ──────────────────────────────────────────────────────────────────────
+public class SendTextRequest           { public string Jid { get; set; } = ""; public string Text { get; set; } = ""; }
+public class ButtonItem                { public string Id  { get; set; } = ""; public string Text { get; set; } = ""; }
+public class SendButtonsRequest        { public string Jid { get; set; } = ""; public string Text { get; set; } = ""; public string? Footer { get; set; } public List<ButtonItem> Buttons { get; set; } = new(); }
+public class ListRow                   { public string Id { get; set; } = ""; public string Title { get; set; } = ""; public string? Description { get; set; } }
+public class ListSection               { public string Title { get; set; } = ""; public List<ListRow> Rows { get; set; } = new(); }
+public class SendListRequest           { public string Jid { get; set; } = ""; public string Text { get; set; } = ""; public string? Title { get; set; } public string ButtonText { get; set; } = "בחר אפשרות"; public string? Footer { get; set; } public List<ListSection> Sections { get; set; } = new(); }
+public class SendButtonResponseRequest { public string Jid { get; set; } = ""; public string ButtonId { get; set; } = ""; public string DisplayText { get; set; } = ""; }
+public class SendListResponseRequest   { public string Jid { get; set; } = ""; public string RowId { get; set; } = ""; public string? Title { get; set; } }
+public class SendPingRequest           { public string Jid { get; set; } = ""; public string? Text { get; set; } }
 
+public class SendImageRequest
+{
+    public string Jid { get; set; } = "";
+    public string Image { get; set; } = "";
+    public string? Caption { get; set; }
+    public string? Mimetype { get; set; } = "image/jpeg";
+}
 
-// ── 1. הוסף למחלקה SendController, מתחת ל-SendText ─────────────────────────
-
-    // ── Send template ─────────────────────────────────────────────────────────
-    [HttpPost("template")]
-    public async Task<IActionResult> SendTemplate(Guid phoneId, [FromBody] SendTemplateRequest request)
-    {
-        if (string.IsNullOrWhiteSpace(request.Jid))
-            return BadRequest(new { error = "jid is required" });
-        if (string.IsNullOrWhiteSpace(request.Name) && !request.TemplateId.HasValue)
-            return BadRequest(new { error = "name or templateId is required" });
-
-        var phone = await _supabaseService.GetPhoneByIdAsync(phoneId);
-        if (phone == null)
-            return NotFound(new { error = "Phone not found" });
-        if (string.IsNullOrEmpty(phone.DockerUrl))
-            return BadRequest(new { error = "Container not running", dockerStatus = phone.DockerStatus });
-
-        var provider = string.IsNullOrWhiteSpace(phone.Provider) ? "baileys" : phone.Provider;
-
-        // מסלול Cloud API עדיין לא קיים — נכשל מפורשות ולא בשקט.
-        if (provider != "baileys")
-            return StatusCode(501, new { error = "Template send is implemented for baileys only", provider });
-
-        // ── שליפת התבנית ──────────────────────────────────────────────────────
-        var lang = string.IsNullOrWhiteSpace(request.Lang) ? phone.Lang : request.Lang;
-
-        var template = request.TemplateId.HasValue
-            ? await _supabaseService.GetTemplateByIdAsync(phoneId, request.TemplateId.Value)
-            : await _supabaseService.GetTemplateAsync(phoneId, request.Name, lang);
-
-        if (template == null)
-            return NotFound(new { error = "Template not found", name = request.Name, lang });
-
-        if (template.Status != "approved")
-            return Conflict(new { error = "Template is not approved", status = template.Status });
-        if (!template.IsPublished)
-            return Conflict(new { error = "Template is not published", name = template.Name });
-
-        var content = template.Content;
-        if (content?.Body == null || string.IsNullOrWhiteSpace(content.Body.Text))
-            return BadRequest(new { error = "Template has no BODY" });
-
-        // ── פרמטרים ───────────────────────────────────────────────────────────
-        // params מובנה { header:[], body:[] }, או bodyParams שטוח כשאין HEADER.
-        var pars = request.Params ?? new Dictionary<string, List<string>>();
-        if (request.BodyParams is { Count: > 0 } && !pars.ContainsKey("body"))
-            pars["body"] = request.BodyParams;
-
-        var headerVals = pars.TryGetValue("header", out var hv) ? hv : new List<string>();
-        var bodyVals   = pars.TryGetValue("body",   out var bv) ? bv : new List<string>();
-
-        var headerFmt = content.Header?.Format ?? "none";
-
-        if (headerFmt is "image" or "video" or "document")
-        {
-            return BadRequest(new
-            {
-                error  = "Media header is not supported on baileys template send",
-                format = headerFmt,
-            });
-        }
-
-        var headerText = headerFmt == "text" ? (content.Header?.Text ?? "") : "";
-
-        var needHeader = MaxParamIndex(headerText);
-        var needBody   = MaxParamIndex(content.Body.Text);
-
-        if (headerVals.Count < needHeader || bodyVals.Count < needBody)
-        {
-            return BadRequest(new
-            {
-                error    = "Missing template parameters",
-                required = new { header = needHeader, body = needBody },
-                supplied = new { header = headerVals.Count, body = bodyVals.Count },
-            });
-        }
-
-        // ── רינדור ────────────────────────────────────────────────────────────
-        var lines = new List<string>();
-        if (!string.IsNullOrWhiteSpace(headerText))
-            lines.Add(FillParams(headerText, headerVals));
-
-        lines.Add(FillParams(content.Body.Text, bodyVals));
-
-        var footer   = content.Footer?.Text;
-        var bodyOnly = string.Join("\n", lines);
-        var fullText = string.IsNullOrWhiteSpace(footer) ? bodyOnly : $"{bodyOnly}\n{footer}";
-
-        _logger.LogInformation(
-            "[TEMPLATE] {Name}/{Lang} → {Jid} | params h={H} b={B} len={Len}",
-            template.Name, template.Lang, request.Jid,
-            headerVals.Count, bodyVals.Count, fullText.Length);
-
-        // ── שליחה לקונטיינר דרך ForwardToContainer ────────────────────────────
-        // כך מקבלים sender_log, חילוץ messageId וטיפול שגיאות בחינם.
-        // תבנית עם quick_reply → /send/buttons, אחרת הכפתורים נעלמים.
-        var buttons = (content.Buttons ?? new List<TemplateButton>())
-            .Where(x => !string.IsNullOrWhiteSpace(x.Text))
-            .Select((x, i) => new ButtonItem { Id = $"btn_{i + 1}", Text = x.Text! })
-            .ToList();
-
-        if (buttons.Count > 0)
-        {
-            var btnReq = new SendButtonsRequest
-            {
-                Jid     = request.Jid,
-                Text    = bodyOnly,
-                Footer  = footer,
-                Buttons = buttons,
-            };
-
-            return await ForwardToContainer(phoneId, "/send/buttons", btnReq, request.Jid,
-                "template",
-                new { template = template.Name, lang = template.Lang, text = bodyOnly, footer, buttons });
-        }
-
-        var txtReq = new SendTextRequest { Jid = request.Jid, Text = fullText };
-
-        return await ForwardToContainer(phoneId, "/send/text", txtReq, request.Jid,
-            "template",
-            new { template = template.Name, lang = template.Lang, text = fullText });
-    }
-
-
-    // ── 2. עזרי תבנית — הוסף לאותה מחלקה ──────────────────────────────────────
-
-    private static readonly System.Text.RegularExpressions.Regex ParamRe =
-        new(@"\{\{\s*(\d+)\s*\}\}", System.Text.RegularExpressions.RegexOptions.Compiled);
-
-    /// <summary>המספר הגבוה ביותר שמופיע כ-{{n}} — כמה ערכים נדרשים לרכיב.</summary>
-    private static int MaxParamIndex(string? text)
-    {
-        if (string.IsNullOrEmpty(text)) return 0;
-
-        var max = 0;
-        foreach (System.Text.RegularExpressions.Match m in ParamRe.Matches(text))
-            if (int.TryParse(m.Groups[1].Value, out var n) && n > max)
-                max = n;
-
-        return max;
-    }
-
-    private static string FillParams(string? text, List<string> values) =>
-        ParamRe.Replace(text ?? "", m =>
-        {
-            var idx = int.Parse(m.Groups[1].Value) - 1;
-            return idx >= 0 && idx < values.Count ? values[idx] ?? "" : "";
-        });
-
-
-// ── 3. DTO — הוסף לאזור ה-DTOs בסוף הקובץ ──────────────────────────────────
+public class SendStickerRequest
+{
+    public string Jid { get; set; } = "";
+    public string Sticker { get; set; } = "";
+}
 
 public class SendTemplateRequest
 {
@@ -467,42 +487,4 @@ public class SendTemplateRequest
 
     /// <summary>חלופה שטוחה — ממופה ל-body.</summary>
     public List<string>? BodyParams { get; set; }
-}
-
-
-// ════════════════════════════════════════════════════════════════════════════
-// לבדוק לפני הרצה
-// ════════════════════════════════════════════════════════════════════════════
-// message_type = "template" הוא ערך חדש ב-sender_log. ההערה במודל אומרת
-// text/buttons/list/ping. אם יש CHECK constraint על העמודה, ה-insert ייכשל
-// ו-SenderLogService.LogAsync יבלע את החריגה — ההודעה תישלח והלוג ייעלם בשקט.
-//
-//   select conname, pg_get_constraintdef(oid)
-//   from pg_constraint
-//   where conrelid = 'sender_log'::regclass;
-
-
-
-// ── DTOs (ללא שינוי) ──────────────────────────────────────────────────────────
-public class SendTextRequest           { public string Jid { get; set; } = ""; public string Text { get; set; } = ""; }
-public class ButtonItem                { public string Id  { get; set; } = ""; public string Text { get; set; } = ""; }
-public class SendButtonsRequest        { public string Jid { get; set; } = ""; public string Text { get; set; } = ""; public string? Footer { get; set; } public List<ButtonItem> Buttons { get; set; } = new(); }
-public class ListRow                   { public string Id { get; set; } = ""; public string Title { get; set; } = ""; public string? Description { get; set; } }
-public class ListSection               { public string Title { get; set; } = ""; public List<ListRow> Rows { get; set; } = new(); }
-public class SendListRequest           { public string Jid { get; set; } = ""; public string Text { get; set; } = ""; public string? Title { get; set; } public string ButtonText { get; set; } = "בחר אפשרות"; public string? Footer { get; set; } public List<ListSection> Sections { get; set; } = new(); }
-public class SendButtonResponseRequest { public string Jid { get; set; } = ""; public string ButtonId { get; set; } = ""; public string DisplayText { get; set; } = ""; }
-public class SendListResponseRequest   { public string Jid { get; set; } = ""; public string RowId { get; set; } = ""; public string? Title { get; set; } }
-public class SendPingRequest           { public string Jid { get; set; } = ""; public string? Text { get; set; } }
-public class SendImageRequest
-{
-    public string Jid { get; set; } = "";
-    public string Image { get; set; } = "";
-    public string? Caption { get; set; }
-    public string? Mimetype { get; set; } = "image/jpeg";
-}
-
-public class SendStickerRequest
-{
-    public string Jid { get; set; } = "";
-    public string Sticker { get; set; } = "";
 }
