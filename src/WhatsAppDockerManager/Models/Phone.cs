@@ -77,6 +77,22 @@ public int AuthRevision { get; set; } = 0;
     [Column("pairing_code_expiry")] public DateTime? PairingCodeExpiry { get; set; }
     [Column("use_pairing_code")]    public bool      UsePairingCode    { get; set; }
     [Column("creds_updated_at")]    public DateTime? CredsUpdatedAt    { get; set; }
+
+
+    // ════════════════════════════════════════════════════════════════════════════
+// Models/Phone.cs — שתי עמודות חדשות
+// ════════════════════════════════════════════════════════════════════════════
+// הוסף לתוך המחלקה Phone, ליד שאר ה-[Column].
+// שתיהן קיימות ב-DB אחרי הרצת 01-database/2026-08-29_templates.sql
+// עם NOT NULL DEFAULT, לכן אין צורך ב-nullable.
+
+    /// <summary>baileys = WA socket לא רשמי | whatsapp = Cloud API רשמי</summary>
+    [Column("provider")]
+    public string Provider { get; set; } = "baileys";
+
+    /// <summary>שפת ברירת מחדל לתבניות של הטלפון.</summary>
+    [Column("lang")]
+    public string Lang { get; set; } = "he";
 }
 
 public static class PhoneDockerStatus
