@@ -86,7 +86,10 @@ public class SendController : ControllerBase
 
         if (template.Status != "approved")
             return Conflict(new { error = "Template is not approved", status = template.Status });
-        if (!template.IsPublished)
+
+        // request.Test = שליחת בדיקה מה-UI. מוותרת על is_published בלבד;
+        // status עדיין חייב להיות approved.
+        if (!template.IsPublished && !request.Test)
             return Conflict(new { error = "Template is not published", name = template.Name });
 
         var content = template.Content;
@@ -487,4 +490,7 @@ public class SendTemplateRequest
 
     /// <summary>חלופה שטוחה — ממופה ל-body.</summary>
     public List<string>? BodyParams { get; set; }
+
+    /// <summary>שליחת בדיקה: מדלגת על בדיקת is_published. status עדיין חייב להיות approved.</summary>
+    public bool Test { get; set; }
 }
