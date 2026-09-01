@@ -313,12 +313,28 @@ private async Task HandleAuthenticated(Guid phoneId, Phone phone, ContainerEvent
             // ══════════════════════════════════════════════════════
             // הודעה נכנסת
             // ══════════════════════════════════════════════════════
+
+            
             Contact? existing = null;
             if (!string.IsNullOrEmpty(contactLid))
                 existing = await _supabaseService.GetContactByLidAsync(phoneId, contactLid);
             if (existing == null)
                 existing = await _supabaseService.GetContactByNumberAsync(phoneId, contactNumber);
 
+            // Prober announcement: promote whatever we just found, or create.
+            string? incomingText = null;
+            if (payload.Data?.TryGetValue("text", out var txtVal) == true)
+                incomingText = txtVal?.ToString();
+
+            var hbContact = await TryHandleHeartbeatAsync(
+                phoneId, phone, contactNumber, contactLid, incomingText, existing);
+            
+            if (hbContact != null)
+            {
+                await SaveMessage(phoneId, phone, hbContact, contactNumber, contactLid, isIncoming, payload);
+                return;
+            }
+            
             Contact contact;
             if (existing != null)
             {
@@ -358,6 +374,58 @@ private async Task HandleAuthenticated(Guid phoneId, Phone phone, ContainerEvent
         {
             _logger.LogError(ex, "Error handling message for phone {PhoneId}", phoneId);
         }
+    }
+  
+    private async Task<Contact?> TryHandleHeartbeatAsync(
+        Guid phoneId, Phone phone,
+        string contactNumber, string? contactLid,
+        string? messageText, Contact? existing)
+    {
+        if (string.IsNullOrWhiteSpace(messageText)) return null;
+
+        var prober = await _supabaseService
+            .GetHeartbeatPhoneByIdentificationAsync(messageText.Trim());
+        if (prober == null) return null;
+
+        _logger.LogWarning("[HB] Identification match on phone {PhoneId} -> prober {ProberId} uid={Uid}",
+            phoneId, prober.Id, prober.Uid);
+
+        Contact contact;
+
+        if (existing != null)
+        {
+            existing.HeartbeatPhoneId = prober.Id;
+            existing.Tag              = "active";
+            existing.IsBot            = true;
+            if (!string.IsNullOrEmpty(contactLid))         existing.Lid    = contactLid;
+            if (!string.IsNullOrEmpty(prober.PhoneNumber)) existing.Number = prober.PhoneNumber;
+            if (phone.UserId.HasValue && existing.UserId == null) existing.UserId = phone.UserId;
+
+            contact = await _supabaseService.UpdateContactAsync(existing);
+            _logger.LogWarning("[HB] Promoted contact {ContactId} on phone {PhoneId}", contact.Id, phoneId);
+        }
+        else
+        {
+            contact = await _supabaseService.CreateContactAsync(new Contact
+            {
+                PhoneId          = phoneId,
+                Lid              = contactLid,
+                Number           = prober.PhoneNumber,
+                Name             = "Heartbeat",
+                WhatsappName     = "Heartbeat",
+                Tag              = "active",      // active, not draft - skips the wizard
+                IsBot            = true,
+                UserId           = phone.UserId,
+                HeartbeatPhoneId = prober.Id
+            });
+            _logger.LogWarning("[HB] Created contact {ContactId} on phone {PhoneId}", contact.Id, phoneId);
+        }
+
+        // Second table: the phone now knows which prober watches it.
+        if (phone.HeartbeatPhoneId != prober.Id)
+            await _supabaseService.UpdatePhoneHeartbeatIdAsync(phoneId, prober.Id);
+
+        return contact;
     }
 
 private async Task SaveMessage(
