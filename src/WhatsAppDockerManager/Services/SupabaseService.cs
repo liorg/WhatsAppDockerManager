@@ -105,6 +105,9 @@ public interface ISupabaseService
     Task<PhoneTemplate?> GetTemplateAsync(Guid phoneId, string name, string? lang);
     Task<PhoneTemplate?> GetTemplateByIdAsync(Guid phoneId, Guid templateId);
 
+    Task<List<HeartbeatPhone>> GetActiveHeartbeatPhonesAsync();
+    Task<Contact?> GetContactByHeartbeatPhoneAsync(Guid phoneId, Guid heartbeatPhoneId);
+
 }
 
 public class SupabaseService : ISupabaseService
@@ -1686,7 +1689,38 @@ public async Task<List<Phone>> GetPhonesByNumberAsync(string phoneNumber)
             return null;
         }
     }
+    public async Task<List<HeartbeatPhone>> GetActiveHeartbeatPhonesAsync()
+    {
+        try
+        {
+            var response = await _client.From<HeartbeatPhone>()
+                .Where(h => h.Status == "CONNECT")
+                .Get();
+            return response.Models;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error loading heartbeat phones");
+            return new List<HeartbeatPhone>();
+        }
+    }
 
+    public async Task<Contact?> GetContactByHeartbeatPhoneAsync(Guid phoneId, Guid heartbeatPhoneId)
+    {
+        try
+        {
+            var response = await _client.From<Contact>()
+                .Where(c => c.PhoneId == phoneId)
+                .Where(c => c.HeartbeatPhoneId == heartbeatPhoneId)
+                .Get();
+            return response.Models.FirstOrDefault();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error getting heartbeat contact for phone {PhoneId}", phoneId);
+            return null;
+        }
+    }
 
 
 
