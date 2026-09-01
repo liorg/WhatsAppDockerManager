@@ -104,9 +104,10 @@ public interface ISupabaseService
     Task InsertMessageEventAsync(string whatsappMessageId, Guid? phoneId,string? jid, string eventType, int? statusCode = null, string? errorCode = null,string? errorMessage = null,object? rawPayload = null);
     Task<PhoneTemplate?> GetTemplateAsync(Guid phoneId, string name, string? lang);
     Task<PhoneTemplate?> GetTemplateByIdAsync(Guid phoneId, Guid templateId);
-
-    Task<List<HeartbeatPhone>> GetActiveHeartbeatPhonesAsync();
+    
+    Task<HeartbeatPhone?> GetHeartbeatPhoneByIdentificationAsync(string identificationType);
     Task<Contact?> GetContactByHeartbeatPhoneAsync(Guid phoneId, Guid heartbeatPhoneId);
+    Task UpdatePhoneHeartbeatIdAsync(Guid phoneId, Guid heartbeatPhoneId);
 
 }
 
@@ -1689,19 +1690,29 @@ public async Task<List<Phone>> GetPhonesByNumberAsync(string phoneNumber)
             return null;
         }
     }
-    public async Task<List<HeartbeatPhone>> GetActiveHeartbeatPhonesAsync()
+
+
+    /// <summary>
+    /// identification_type may sit in the DB as literal \uXXXX escapes rather
+    /// than the emoji itself, so both sides are normalised before comparing.
+    /// The table holds a handful of probers, so reading it whole is cheaper
+    /// than trying to express the normalisation as a PostgREST filter.
+    /// </summary>
+    public async Task<HeartbeatPhone?> GetHeartbeatPhoneByIdentificationAsync(string identificationType)
     {
         try
         {
-            var response = await _client.From<HeartbeatPhone>()
-                .Where(h => h.Status == "CONNECT")
-                .Get();
-            return response.Models;
+            var wanted = NormalizeEmoji(identificationType);
+            if (string.IsNullOrEmpty(wanted)) return null;
+
+            var response = await _client.From<HeartbeatPhone>().Get();
+            return response.Models.FirstOrDefault(h =>
+                NormalizeEmoji(h.IdentificationType) == wanted);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error loading heartbeat phones");
-            return new List<HeartbeatPhone>();
+            _logger.LogError(ex, "Error looking up heartbeat phone by identification");
+            return null;
         }
     }
 
@@ -1722,6 +1733,44 @@ public async Task<List<Phone>> GetPhonesByNumberAsync(string phoneNumber)
         }
     }
 
+    /// <summary>
+    /// Single-column update rather than saving the whole Phone: a partially
+    /// loaded model would blank every column it does not carry.
+    /// </summary>
+    public async Task UpdatePhoneHeartbeatIdAsync(Guid phoneId, Guid heartbeatPhoneId)
+    {
+        try
+        {
+            await _client.From<Phone>()
+                .Where(p => p.Id == phoneId)
+                .Set(p => p.HeartbeatPhoneId!, heartbeatPhoneId)
+                .Update();
+
+            _logger.LogInformation("[HB] phones.heartbeat_phone_id set on {PhoneId}", phoneId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error setting heartbeat_phone_id on phone {PhoneId}", phoneId);
+        }
+    }
+
+    private static string NormalizeEmoji(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return "";
+        var s = raw.Trim();
+        if (!s.Contains("\\u")) return s;
+
+        try
+        {
+            return System.Text.RegularExpressions.Regex.Replace(
+                s, @"\\u([0-9A-Fa-f]{4})",
+                m => ((char)Convert.ToInt32(m.Groups[1].Value, 16)).ToString());
+        }
+        catch
+        {
+            return s;
+        }
+    }
 
 
     
