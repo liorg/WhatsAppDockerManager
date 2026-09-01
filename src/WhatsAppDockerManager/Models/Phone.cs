@@ -93,6 +93,13 @@ public int AuthRevision { get; set; } = 0;
     /// <summary>שפת ברירת מחדל לתבניות של הטלפון.</summary>
     [Column("lang")]
     public string Lang { get; set; } = "he";
+
+     /// <summary>
+    /// The heartbeatphones row that probes this phone. Set the first time the
+    /// prober announces itself with its identification emoji.
+    /// </summary>
+    [Column("heartbeat_phone_id")]
+    public Guid? HeartbeatPhoneId { get; set; }
 }
 
 public static class PhoneDockerStatus
