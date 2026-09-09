@@ -289,5 +289,17 @@ sudo systemctl restart whatsapp-manager
 
 LINK:
 
+```bash
 http://localhost:5000/swagger/index.html
 
+```
+
+test CONNECTION CLOSE
+```bash
+docker exec whatsapp_972504476645_3beff8fa \
+  grep -A2 'Connection closed' /var/log/baileys.log \
+  | grep -E '^\[[0-9]|code:' \
+  | paste - - \
+  | sed 's/\s\+/ /g'
+
+```
