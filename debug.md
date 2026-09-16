@@ -32,6 +32,14 @@ clear
 ```
 
 
+direction=true = from contact to phone
+```bash
+select * from messages order by sent_at desc limit 5
+```
+
+
+
+
 
 
 
