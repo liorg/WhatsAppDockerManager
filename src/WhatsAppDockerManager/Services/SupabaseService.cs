@@ -1319,7 +1319,7 @@ public async Task UpdateHostHeartbeatAsync(Guid hostId, HostMetrics? metrics = n
     bool direction, string? leafId = null,
     string? whatsappMessageId = null,
     DateTime? whatsappTimestamp = null,
-    string? mediaUrl = null , string? ver = null, string? sendTo = null);
+    string? mediaUrl = null , string? ver = null, string? sendTo = null)
 {
     string contentJson;
     try { contentJson = JsonSerializer.Serialize(content, _jsonOptions); }
