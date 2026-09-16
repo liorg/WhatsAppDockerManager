@@ -4,6 +4,33 @@ http://localhost:5000/swagger/index.html
 Troubleshooting
 הcontainer לא עולה
 
+```bash
+cd /opt/myapp
+ sudo ./update.sh
+```
+
+```bash
+docker ps -a --format "table {{.Names}}\t{{.Status}}\t{{.Image}}"
+```
+```bash
+docker stop  whatsapp_972504476645_3beff8fa
+docker rm whatsapp_972504476645_3beff8fa
+```
+
+
+```bash
+sudo systemctl restart whatsapp-manager.service
+```
+
+clear
+```bash
+ docker image prune -a
+```
+
+
+
+
+
 # בדוק logs
 
 docker logs whatsapp_<phone_number>
