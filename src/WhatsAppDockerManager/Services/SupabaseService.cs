@@ -62,7 +62,7 @@ public interface ISupabaseService
 
     Task<bool> MessageExistsAsync(string whatsappMessageId);
    Task<Message> AddMessageAsync(Guid phoneId, Guid contactId, string sender, object content, bool direction,
- string? leafId = null, string? whatsappMessageId = null, DateTime? whatsappTimestamp = null,string? mediaUrl = null);  
+  string? leafId = null, string? whatsappMessageId = null, DateTime? whatsappTimestamp = null,string? mediaUrl = null, string? ver = null, string? sendTo = null);
 
 
     // PingSender operations
@@ -1319,7 +1319,7 @@ public async Task UpdateHostHeartbeatAsync(Guid hostId, HostMetrics? metrics = n
     bool direction, string? leafId = null,
     string? whatsappMessageId = null,
     DateTime? whatsappTimestamp = null,
-    string? mediaUrl = null)    // ← חדש
+    string? mediaUrl = null , string? ver = null, string? sendTo = null);
 {
     string contentJson;
     try { contentJson = JsonSerializer.Serialize(content, _jsonOptions); }
@@ -1342,7 +1342,9 @@ public async Task UpdateHostHeartbeatAsync(Guid hostId, HostMetrics? metrics = n
         Status            = "sent",
         RetryCounter      = 0,
         SentAt            = whatsappTimestamp ?? DateTime.UtcNow,
-        MediaUrl          = mediaUrl,    // ← חדש
+        MediaUrl          = mediaUrl,    
+        Ver               = ver,
+        SendTo            = sendTo,
     };
  
     return await CreateMessageAsync(message);
