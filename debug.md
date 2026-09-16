@@ -5,6 +5,10 @@ Troubleshooting
 הcontainer לא עולה
 
 ```bash
+docker pull liorgr/whatsapp-single:latest
+```
+
+```bash
 cd /opt/myapp
  sudo ./update.sh
 ```
