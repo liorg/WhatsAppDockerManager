@@ -129,9 +129,10 @@ grep -c currentSock ~/index.js      # 14
 grep APP_VERSION ~/index.js | head -1   # 1.0.0.33
 
 # גיבוי
+bash```
 docker exec whatsapp_972504476645_3beff8fa \
   cp /app/baileys/src/index.js /app/baileys/src/index.js.bak33
-
+'''
 # העתקה + אימות תחביר לפני restart
 docker cp ~/index.js whatsapp_972504476645_3beff8fa:/app/baileys/src/index.js
 docker exec whatsapp_972504476645_3beff8fa node --check /app/baileys/src/index.js && echo SYNTAX_OK
