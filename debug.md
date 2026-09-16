@@ -1,18 +1,24 @@
+```bash
 http://localhost:5000/swagger/index.html
+```
 Troubleshooting
 הcontainer לא עולה
 
 # בדוק logs
+
 docker logs whatsapp_<phone_number>
 
+```bash
 # בדוק סטטוס
 curl http://localhost:5000/api/phones
+```
 
 בעיות Docker socket
 
 # Linux - ודא הרשאות
+```bash
 sudo chmod 666 /var/run/docker.sock
-
+```
 # או הוסף את המשתמש לקבוצת docker
 sudo usermod -aG docker $USER
 
