@@ -109,6 +109,12 @@ public interface ISupabaseService
     Task<Contact?> GetContactByHeartbeatPhoneAsync(Guid phoneId, Guid heartbeatPhoneId);
     Task UpdatePhoneHeartbeatIdAsync(Guid phoneId, Guid heartbeatPhoneId);
 
+        // ── Template registration ─────────────────────────────────────────────────
+    Task<PhoneTemplate?> GetPhoneTemplateByProviderIdAsync(Guid phoneId, string providerTemplateId);
+    Task<PhoneTemplate>  CreatePhoneTemplateAsync(PhoneTemplate template);
+    Task<PhoneTemplate>  UpdatePhoneTemplateAsync(PhoneTemplate template);
+    Task UpdatePhoneTemplateStatusAsync(Guid templateId, string status, string? rejectedReason);
+
 }
 
 public class SupabaseService : ISupabaseService
@@ -1772,6 +1778,49 @@ public async Task<List<Phone>> GetPhonesByNumberAsync(string phoneNumber)
         {
             return s;
         }
+    }
+
+        // ── Template registration ─────────────────────────────────────────────────
+    public async Task<PhoneTemplate?> GetPhoneTemplateByProviderIdAsync(Guid phoneId, string providerTemplateId)
+    {
+        var r = await _client.From<PhoneTemplate>()
+            .Where(t => t.PhoneId == phoneId)
+            .Where(t => t.ProviderTemplateId == providerTemplateId)
+            .Limit(1).Get();
+        return r.Models.FirstOrDefault();
+    }
+
+    public async Task<PhoneTemplate> CreatePhoneTemplateAsync(PhoneTemplate template)
+    {
+        var r = await _client.From<PhoneTemplate>().Insert(template);
+        return r.Models.First();
+    }
+
+    public async Task<PhoneTemplate> UpdatePhoneTemplateAsync(PhoneTemplate template)
+    {
+        var r = await _client.From<PhoneTemplate>().Update(template);
+        return r.Models.FirstOrDefault() ?? template;
+    }
+
+    public async Task UpdatePhoneTemplateStatusAsync(Guid templateId, string status, string? rejectedReason)
+    {
+        // שני ענפים ולא query מצטבר — כמו GetTemplateAsync (חיכוך ISupabaseTable/IPostgrestTable)
+        if (rejectedReason != null)
+        {
+            await _client.From<PhoneTemplate>()
+                .Where(t => t.Id == templateId)
+                .Set(t => t.Status, status)
+                .Set(t => t.RejectedReason!, rejectedReason)
+                .Set(t => t.UpdatedAt, DateTime.UtcNow)
+                .Update();
+            return;
+        }
+
+        await _client.From<PhoneTemplate>()
+            .Where(t => t.Id == templateId)
+            .Set(t => t.Status, status)
+            .Set(t => t.UpdatedAt, DateTime.UtcNow)
+            .Update();
     }
 
 

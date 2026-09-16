@@ -1,7 +1,7 @@
-// Models/PhoneTemplate.cs — קובץ חדש
+// Models/PhoneTemplate.cs
 //
-// ממופה לטבלת phone_templates. עמודת content היא jsonb וממופה
-// לטיפוס מורכב; JsonPropertyName מכסה כל PropertyNamingPolicy.
+// ממופה לטבלת phone_templates. עמודת content היא jsonb וממופה לטיפוס מורכב.
+// Supabase.Postgrest מסריאל עם Newtonsoft → JsonProperty; JsonPropertyName ל-System.Text.Json.
 
 using System.Text.Json.Serialization;
 using Supabase.Postgrest.Attributes;
@@ -38,10 +38,19 @@ public class PhoneTemplate : BaseModel
     public int ParamCount { get; set; }
 
     [Column("content")]
-    public TemplateContent? Content { get; set; }
+    public TemplateContent Content { get; set; } = new();
+
+    [Column("provider_template_id")]
+    public string? ProviderTemplateId { get; set; }
+
+    [Column("rejected_reason")]
+    public string? RejectedReason { get; set; }
 
     [Column("created_at")]
     public DateTime CreatedAt { get; set; }
+
+    [Column("updated_at")]
+    public DateTime UpdatedAt { get; set; }
 }
 
 
@@ -49,26 +58,26 @@ public class PhoneTemplate : BaseModel
 
 public class TemplateContent
 {
-    [JsonPropertyName("header")]  public TemplateHeader?       Header  { get; set; }
-    [JsonPropertyName("body")]    public TemplatePart?         Body    { get; set; }
-    [JsonPropertyName("footer")]  public TemplatePart?         Footer  { get; set; }
-    [JsonPropertyName("buttons")] public List<TemplateButton>? Buttons { get; set; }
+    [JsonPropertyName("header"), Newtonsoft.Json.JsonProperty("header")]   public TemplateHeader?       Header  { get; set; }
+    [JsonPropertyName("body"), Newtonsoft.Json.JsonProperty("body")]       public TemplatePart?         Body    { get; set; }
+    [JsonPropertyName("footer"), Newtonsoft.Json.JsonProperty("footer")]   public TemplatePart?         Footer  { get; set; }
+    [JsonPropertyName("buttons"), Newtonsoft.Json.JsonProperty("buttons")] public List<TemplateButton>? Buttons { get; set; }
 }
 
 public class TemplatePart
 {
-    [JsonPropertyName("text")] public string? Text { get; set; }
+    [JsonPropertyName("text"), Newtonsoft.Json.JsonProperty("text")] public string? Text { get; set; }
 }
 
 public class TemplateHeader : TemplatePart
 {
     /// <summary>none | text | image | video | document</summary>
-    [JsonPropertyName("format")] public string? Format { get; set; }
+    [JsonPropertyName("format"), Newtonsoft.Json.JsonProperty("format")] public string? Format { get; set; }
 }
 
 public class TemplateButton
 {
     /// <summary>quick_reply</summary>
-    [JsonPropertyName("type")] public string? Type { get; set; }
-    [JsonPropertyName("text")] public string? Text { get; set; }
+    [JsonPropertyName("type"), Newtonsoft.Json.JsonProperty("type")] public string? Type { get; set; }
+    [JsonPropertyName("text"), Newtonsoft.Json.JsonProperty("text")] public string? Text { get; set; }
 }
