@@ -492,7 +492,9 @@ private async Task SaveMessage(
         leafId:            null,
         whatsappMessageId: payload.MessageId,
         whatsappTimestamp: whatsappTimestamp,
-        mediaUrl:          mediaUrl);    
+        mediaUrl:          mediaUrl,
+        ver:               payload.Ver,
+        sendTo:            payload.SendTo);   
     
         // ── Dispatch ל-webhooks רשומים (background, לא חוסם) ─────────────────
     _ = Task.Run(async () =>
@@ -538,4 +540,6 @@ public class ContainerEventPayload
     [JsonPropertyName("status")]       public int?    Status         { get; set; }
     [JsonPropertyName("errorCode")]    public string? ErrorCode    { get; set; }
     [JsonPropertyName("errorMessage")] public string? ErrorMessage { get; set; }
+    [JsonPropertyName("ver")]          public string? Ver          { get; set; }
+    [JsonPropertyName("sendTo")]       public string? SendTo       { get; set; }
 }
