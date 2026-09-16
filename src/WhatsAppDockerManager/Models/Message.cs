@@ -50,4 +50,11 @@ public class Message : BaseModel
     [Column("media_url")]
     public string? MediaUrl { get; set; }
 
+
+    [Column("ver")]
+    public string? Ver { get; set; }
+
+    [Column("send_to")]
+    public string? SendTo { get; set; }
+
 }
