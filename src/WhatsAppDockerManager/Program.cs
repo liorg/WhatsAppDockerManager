@@ -31,7 +31,7 @@ builder.Services.AddSingleton<IContainerManager, ContainerManager>();
 builder.Services.AddSingleton<OrphanContainerCleanupService>();
 builder.Services.AddSingleton<IWebhookDispatcherService, WebhookDispatcherService>();
 builder.Services.AddHostedService<HeartbeatService>();
-
+builder.Services.AddHostedService<TemplateStatusSyncService>();
 
 builder.Services.AddHttpClient();
 
