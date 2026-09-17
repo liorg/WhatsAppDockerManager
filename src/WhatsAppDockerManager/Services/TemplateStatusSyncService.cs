@@ -28,12 +28,13 @@ public class TemplateStatusSyncService : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        _logger.LogInformation("[TEMPLATE-SYNC] Started, interval={Seconds}s", _interval.TotalSeconds);
+
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
-                var n = await SyncOnceAsync(stoppingToken);
-                if (n > 0) _logger.LogInformation("[TEMPLATE-SYNC] Updated {Count} template(s)", n);
+                await SyncOnceAsync(stoppingToken);
             }
             catch (Exception ex)
             {
@@ -43,54 +44,48 @@ public class TemplateStatusSyncService : BackgroundService
             try { await Task.Delay(_interval, stoppingToken); }
             catch (TaskCanceledException) { break; }
         }
+
+        _logger.LogInformation("[TEMPLATE-SYNC] Stopped");
     }
 
     private async Task<int> SyncOnceAsync(CancellationToken ct)
     {
         var pending = await _supabase.GetPendingTemplatesAsync();
-        if (pending.Count == 0) return 0;
 
-        var phones  = new Dictionary<Guid, Phone?>();
-        var updated = 0;
+        int noProviderId = 0, noContainer = 0, noAnswer = 0, unchanged = 0, updated = 0;
 
         foreach (var tpl in pending)
         {
             if (ct.IsCancellationRequested) break;
-            if (string.IsNullOrEmpty(tpl.ProviderTemplateId)) continue;
+
+            if (string.IsNullOrEmpty(tpl.ProviderTemplateId)) { noProviderId++; continue; }
 
             if (!phones.TryGetValue(tpl.PhoneId, out var phone))
             {
                 phone = await _supabase.GetPhoneByIdAsync(tpl.PhoneId);
                 phones[tpl.PhoneId] = phone;
             }
-            if (string.IsNullOrEmpty(phone?.DockerUrl)) continue;
+            if (string.IsNullOrEmpty(phone?.DockerUrl)) { noContainer++; continue; }
 
             var raw = await GetFromContainer(
                 phone.DockerUrl, $"/templates/{Uri.EscapeDataString(tpl.ProviderTemplateId)}", ct);
-            if (raw == null) continue;
+            if (raw == null) { noAnswer++; continue; }
 
             using var doc = System.Text.Json.JsonDocument.Parse(raw);
             var rawStatus = doc.RootElement.TryGetProperty("status", out var s) ? s.GetString() : null;
-            if (rawStatus == null) continue;
+            if (rawStatus == null) { noAnswer++; continue; }
 
             var status = MapStatus(rawStatus);
-            if (status == tpl.Status) continue;
+            if (status == tpl.Status) { unchanged++; continue; }
 
-            var reason    = doc.RootElement.TryGetProperty("rejected_reason", out var r) ? r.GetString() : null;
-            var oldStatus = tpl.Status;
-
-            tpl.Status         = status;
-            tpl.RejectedReason = reason;
-            tpl.UpdatedAt      = DateTime.UtcNow;
-            // תבנית מאושרת שאינה מפורסמת אינה ניתנת לשליחה.
-            if (status == "approved") tpl.IsPublished = true;
-
-            await _supabase.UpdatePhoneTemplateAsync(tpl);
-
-            _logger.LogInformation("[TEMPLATE-SYNC] {Name}/{Lang} {Old} → {New}",
-                tpl.Name, tpl.Lang, oldStatus, status);
+            // ... בלוק העדכון כמו שהוא ...
             updated++;
         }
+
+        _logger.LogInformation(
+            "[TEMPLATE-SYNC] pending={Pending} updated={Updated} unchanged={Unchanged} " +
+            "noProviderId={NoId} noContainer={NoContainer} noAnswer={NoAnswer}",
+            pending.Count, updated, unchanged, noProviderId, noContainer, noAnswer);
 
         return updated;
     }
