@@ -76,15 +76,19 @@ public class TemplateStatusSyncService : BackgroundService
             var status = MapStatus(rawStatus);
             if (status == tpl.Status) continue;
 
-            var reason = doc.RootElement.TryGetProperty("rejected_reason", out var r) ? r.GetString() : null;
-            await _supabase.UpdatePhoneTemplateStatusAsync(tpl.Id, status, reason);
+            var reason    = doc.RootElement.TryGetProperty("rejected_reason", out var r) ? r.GetString() : null;
+            var oldStatus = tpl.Status;
 
+            tpl.Status         = status;
+            tpl.RejectedReason = reason;
+            tpl.UpdatedAt      = DateTime.UtcNow;
             // תבנית מאושרת שאינה מפורסמת אינה ניתנת לשליחה.
-            if (status == "approved" && !tpl.IsPublished)
-                await _supabase.SetPhoneTemplatePublishedAsync(tpl.Id, true);
+            if (status == "approved") tpl.IsPublished = true;
+
+            await _supabase.UpdatePhoneTemplateAsync(tpl);
 
             _logger.LogInformation("[TEMPLATE-SYNC] {Name}/{Lang} {Old} → {New}",
-                tpl.Name, tpl.Lang, tpl.Status, status);
+                tpl.Name, tpl.Lang, oldStatus, status);
             updated++;
         }
 
