@@ -130,6 +130,28 @@ public class TemplatesController : ControllerBase
 
         return JsonRaw(code, raw);
     }
+[HttpPost("validate")]
+public async Task<IActionResult> ValidateTemplate(Guid phoneId, [FromBody] JsonElement body)
+{
+    var (phone, error) = await ResolvePhone(phoneId);
+    if (error != null) return error;
+
+    var name = GetString(body, "name");
+    var lang = GetString(body, "language");
+    if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(lang))
+        return BadRequest(new { error = "name and language are required" });
+
+    var content  = ToTemplateContent(body);
+    var existing = await _supabaseService.GetTemplateAsync(phoneId, name, lang);
+
+    return Ok(new
+    {
+        valid         = content.Body?.Text is { Length: > 0 },
+        alreadyExists = existing?.ProviderTemplateId != null,
+        paramCount    = MaxParamIndex(content.Body?.Text),
+        parsedBody    = content.Body?.Text,
+    });
+}
 
     // ── helpers ───────────────────────────────────────────────────────────────
 
