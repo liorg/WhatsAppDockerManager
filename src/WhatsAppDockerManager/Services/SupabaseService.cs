@@ -61,8 +61,7 @@ public interface ISupabaseService
     Task ClearPairingCodeAsync(Guid phoneId);                              // ← חדש
 
     Task<bool> MessageExistsAsync(string whatsappMessageId);
-   Task<Message> AddMessageAsync(Guid phoneId, Guid contactId, string sender, object content, bool direction,
-  string? leafId = null, string? whatsappMessageId = null, DateTime? whatsappTimestamp = null,string? mediaUrl = null, string? ver = null, string? sendTo = null);
+   Task<Message> AddMessageAsync(Guid phoneId, Guid contactId, string sender, object content, bool direction,string? leafId = null, string? whatsappMessageId = null, DateTime? whatsappTimestamp = null,string? mediaUrl = null, string? ver = null, string? sendTo = null);
 
 
     // PingSender operations
@@ -115,6 +114,8 @@ public interface ISupabaseService
     Task<PhoneTemplate>  UpdatePhoneTemplateAsync(PhoneTemplate template);
     Task UpdatePhoneTemplateStatusAsync(Guid templateId, string status, string? rejectedReason);
 
+
+    Task<List<PhoneTemplate>> GetPendingTemplatesAsync();
 }
 
 public class SupabaseService : ISupabaseService
@@ -1823,6 +1824,16 @@ public async Task<List<Phone>> GetPhonesByNumberAsync(string phoneNumber)
             .Update();
     }
 
+    public async Task<List<PhoneTemplate>> GetPendingTemplatesAsync()
+    {
+        var result = await _client
+            .From<PhoneTemplate>()
+            .Where(t => t.Status == "pending")
+            .Get();
 
+        return result.Models
+            .Where(t => !string.IsNullOrEmpty(t.ProviderTemplateId))
+            .ToList();
+    }
     
 }
