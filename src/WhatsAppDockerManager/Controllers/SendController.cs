@@ -27,6 +27,90 @@ public class SendController : ControllerBase
         _logger            = logger;
     }
 
+        // ── Send ping as template ────────────────────────────────────────────────
+    // כמו SendPing, אבל ההודעה מחוללת מתבנית מאושרת במקום טקסט חופשי.
+    // ה-ping_sender נוצר בדיוק כמו במסלול הרגיל — הוויזארד תלוי ב-pingSenderId.
+    [HttpPost("ping-template")]
+    public async Task<IActionResult> SendPingTemplate(Guid phoneId, [FromBody] SendPingTemplateRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.Jid))
+            return BadRequest(new { error = "jid is required" });
+        if (string.IsNullOrWhiteSpace(request.Name) && !request.TemplateId.HasValue)
+            return BadRequest(new { error = "name or templateId is required" });
+
+        var phone = await _supabaseService.GetPhoneByIdAsync(phoneId);
+        if (phone == null)
+            return NotFound(new { error = "Phone not found" });
+        if (string.IsNullOrEmpty(phone.DockerUrl))
+            return BadRequest(new { error = "Container not running", dockerStatus = phone.DockerStatus });
+
+        var targetNumber = request.Jid.Split('@')[0];
+
+        var pingSender = await _supabaseService.CreatePingSenderAsync(
+            phoneId, targetNumber, null, phone.UserId);
+
+        _logger.LogInformation("[PING-TPL] Created ping_sender {PsId}", pingSender.Id);
+
+        // אותה ולידציה, אותו רינדור, אותו sender_log כמו /send/template.
+        var result = await SendTemplate(phoneId, new SendTemplateRequest
+        {
+            Jid        = request.Jid,
+            Name       = request.Name ?? "",
+            Lang       = request.Lang,
+            TemplateId = request.TemplateId,
+            Params     = request.Params,
+            BodyParams = request.BodyParams,
+            Test       = request.Test,
+        });
+
+        if (result is ObjectResult { StatusCode: >= 400 } failed)
+        {
+            _logger.LogWarning("[PING-TPL] Template send failed | ps={PsId} status={Status}",
+                pingSender.Id, failed.StatusCode);
+            return failed;
+        }
+
+        var messageId = ExtractMessageId(result);
+
+        if (!string.IsNullOrEmpty(messageId))
+        {
+            pingSender.PingMessageId = messageId;
+            await _supabaseService.UpdatePingSenderAsync(pingSender);
+        }
+
+        var contact = await _supabaseService.GetContactByNumberAsync(phoneId, targetNumber);
+        if (contact != null && pingSender.ContactId == null)
+        {
+            pingSender.ContactId = contact.Id;
+            await _supabaseService.UpdatePingSenderAsync(pingSender);
+        }
+
+        _logger.LogInformation("[PING-TPL] {Name}/{Lang} -> {Jid} | ps={PsId} msgId={MsgId}",
+            request.Name, request.Lang, request.Jid, pingSender.Id, messageId);
+
+        return Ok(new
+        {
+            success      = true,
+            pingSenderId = pingSender.Id,
+            messageId,
+            contactId    = contact?.Id,
+            template     = request.Name,
+        });
+    }
+
+    /// <summary>messageId מתוך התשובה שהקונטיינר החזיר דרך ForwardToContainer.</summary>
+    private static string? ExtractMessageId(IActionResult result)
+    {
+        if (result is not ObjectResult { Value: not null } obj) return null;
+
+        try
+        {
+            var json = JsonSerializer.Serialize(obj.Value);
+            var doc  = JsonSerializer.Deserialize<JsonElement>(json);
+            return doc.TryGetProperty("messageId", out var id) ? id.GetString() : null;
+        }
+        catch { return null; }
+    }
     // ── Send image ──────────────────────────────────────────────────────────────
     [HttpPost("image")]
     public async Task<IActionResult> SendImage(Guid phoneId, [FromBody] SendImageRequest request)
@@ -494,3 +578,26 @@ public class SendTemplateRequest
     /// <summary>שליחת בדיקה: מדלגת על בדיקת is_published. status עדיין חייב להיות approved.</summary>
     public bool Test { get; set; }
 }
+public class SendPingTemplateRequest
+{
+    public string Jid { get; set; } = "";
+
+    /// <summary>שם התבנית. חלופה ל-TemplateId.</summary>
+    public string? Name { get; set; }
+
+    /// <summary>קוד שפה. אם ריק — נלקח מ-phones.lang.</summary>
+    public string? Lang { get; set; }
+
+    /// <summary>עוקף את name+lang כשידוע ה-id המדויק.</summary>
+    public Guid? TemplateId { get; set; }
+
+    /// <summary>{ "header": [...], "body": [...] } — לפי סדר {{1}},{{2}}.</summary>
+    public Dictionary<string, List<string>>? Params { get; set; }
+
+    /// <summary>חלופה שטוחה — ממופה ל-body.</summary>
+    public List<string>? BodyParams { get; set; }
+
+    /// <summary>מדלג על בדיקת is_published. status עדיין חייב להיות approved.</summary>
+    public bool Test { get; set; }
+}
+
