@@ -52,6 +52,7 @@ public class TemplateStatusSyncService : BackgroundService
     {
         var pending = await _supabase.GetPendingTemplatesAsync();
 
+        var phones = new Dictionary<Guid, Phone?>();
         int noProviderId = 0, noContainer = 0, noAnswer = 0, unchanged = 0, updated = 0;
 
         foreach (var tpl in pending)
@@ -78,7 +79,19 @@ public class TemplateStatusSyncService : BackgroundService
             var status = MapStatus(rawStatus);
             if (status == tpl.Status) { unchanged++; continue; }
 
-            // ... בלוק העדכון כמו שהוא ...
+            var reason    = doc.RootElement.TryGetProperty("rejected_reason", out var r) ? r.GetString() : null;
+            var oldStatus = tpl.Status;
+
+            tpl.Status         = status;
+            tpl.RejectedReason = reason;
+            tpl.UpdatedAt      = DateTime.UtcNow;
+            // תבנית מאושרת שאינה מפורסמת אינה ניתנת לשליחה.
+            if (status == "approved") tpl.IsPublished = true;
+
+            await _supabase.UpdatePhoneTemplateAsync(tpl);
+
+            _logger.LogInformation("[TEMPLATE-SYNC] {Name}/{Lang} {Old} → {New}",
+                tpl.Name, tpl.Lang, oldStatus, status);
             updated++;
         }
 
@@ -89,7 +102,7 @@ public class TemplateStatusSyncService : BackgroundService
 
         return updated;
     }
-
+    
     private async Task<string?> GetFromContainer(string dockerUrl, string path, CancellationToken ct)
     {
         try
