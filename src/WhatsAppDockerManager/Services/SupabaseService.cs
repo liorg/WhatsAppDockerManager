@@ -114,7 +114,7 @@ public interface ISupabaseService
     Task<PhoneTemplate>  UpdatePhoneTemplateAsync(PhoneTemplate template);
     Task UpdatePhoneTemplateStatusAsync(Guid templateId, string status, string? rejectedReason);
 
-
+    Task DeletePhoneTemplateAsync(Guid templateId);
     Task<List<PhoneTemplate>> GetPendingTemplatesAsync();
 }
 
@@ -145,7 +145,12 @@ public class SupabaseService : ISupabaseService
 
         _client = new Client(url, key, options);
     }
-
+public async Task DeletePhoneTemplateAsync(Guid templateId)
+    {
+        await _client.From<PhoneTemplate>()
+            .Where(t => t.Id == templateId)
+            .Delete();
+    }
     public async Task SetPhoneUsePairingCodeAsync(Guid phoneId, bool usePairingCode)
 {
     try
