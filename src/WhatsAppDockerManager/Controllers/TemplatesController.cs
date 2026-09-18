@@ -27,7 +27,44 @@ public class TemplatesController : ControllerBase
         _httpClientFactory = httpClientFactory;
         _logger            = logger;
     }
+// ── deleteTemplate → FastAPI DELETE /templates/{id} ──────────────────────
+    [HttpDelete("{templateId}")]
+    public async Task<IActionResult> DeleteTemplate(Guid phoneId, string templateId)
+    {
+        var (phone, error) = await ResolvePhone(phoneId);
+        if (error != null) return error;
 
+        var template = await _supabaseService.GetPhoneTemplateByProviderIdAsync(phoneId, templateId);
+
+        var (code, raw) = await CallContainer(
+            phone!.DockerUrl!, HttpMethod.Delete, $"/templates/{Uri.EscapeDataString(templateId)}");
+
+        // 404 מהקונטיינר = כבר לא קיים שם → עדיין מנקים את הרשומה
+        if (code is (< 200 or >= 300) and not 404)
+            return JsonRaw(code, raw);
+
+        if (template == null)
+        {
+            _logger.LogWarning("[TEMPLATE-REG] Delete: no DB row | phoneId={PhoneId} providerId={ProviderId}",
+                phoneId, templateId);
+            return NotFound(new { error = "Template not found in DB", id = templateId, containerDeleted = true });
+        }
+
+        try
+        {
+            await _supabaseService.DeletePhoneTemplateAsync(template.Id);
+            _logger.LogInformation("[TEMPLATE-REG] ✓ deleted {Name}/{Lang} | phoneId={PhoneId} templateId={Id} providerId={ProviderId}",
+                template.Name, template.Lang, phoneId, template.Id, templateId);
+
+            return Ok(new { success = true, id = templateId, phoneTemplateId = template.Id, name = template.Name, lang = template.Lang });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[TEMPLATE-REG] ✗ DB delete failed — נמחק בקונטיינר בלבד | phoneId={PhoneId} providerId={ProviderId}",
+                phoneId, templateId);
+            return StatusCode(500, new { error = "Deleted in container but DB delete failed: " + ex.Message, id = templateId });
+        }
+    }
     // ── createTemplate → FastAPI POST /templates ──────────────────────────────
     [HttpPost]
     public async Task<IActionResult> CreateTemplate(Guid phoneId, [FromBody] JsonElement body)
