@@ -116,6 +116,7 @@ public interface ISupabaseService
 
     Task DeletePhoneTemplateAsync(Guid templateId);
     Task<List<PhoneTemplate>> GetPendingTemplatesAsync();
+    Task<List<PhoneTemplate>> GetPhoneTemplatesAsync(Guid phoneId);
 }
 
 public class SupabaseService : ISupabaseService
@@ -144,6 +145,22 @@ public class SupabaseService : ISupabaseService
         };
 
         _client = new Client(url, key, options);
+    }
+
+public async Task<List<PhoneTemplate>> GetPhoneTemplatesAsync(Guid phoneId)
+    {
+        try
+        {
+            var r = await _client.From<PhoneTemplate>()
+                .Where(t => t.PhoneId == phoneId)
+                .Get();
+            return r.Models;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[DB] Error listing templates for phone {PhoneId}", phoneId);
+            return new List<PhoneTemplate>();
+        }
     }
 public async Task DeletePhoneTemplateAsync(Guid templateId)
     {
