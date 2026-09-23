@@ -1,12 +1,32 @@
 using WhatsAppDockerManager.Configuration;
 using WhatsAppDockerManager.Models;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using DbHost = WhatsAppDockerManager.Models.Host;
 namespace WhatsAppDockerManager.Services;
 using Supabase;
 
+public sealed class StartPrepareResult
+{
+    [JsonPropertyName("host_id")]        public Guid             HostId       { get; set; }
+    [JsonPropertyName("revision")]       public int              Revision     { get; set; }
+    [JsonPropertyName("provider")]       public string           Provider     { get; set; } = "baileys";
+    [JsonPropertyName("image")]          public string           Image        { get; set; } = "";
+    [JsonPropertyName("masked_user")]    public string           MaskedUser   { get; set; } = "****anon";
+    [JsonPropertyName("used_api_ports")] public List<int>        UsedApiPorts { get; set; } = new();
+    [JsonPropertyName("used_ws_ports")]  public List<int>        UsedWsPorts  { get; set; } = new();
+}
+
 public interface ISupabaseService
 {
+    // ── Start RPC (קריאה אחת לפני docker, קריאה אחת אחרי) ──────────
+    Task<StartPrepareResult> PrepareStartAsync(Guid phoneId, Guid hostId, string startingStatus);
+    Task<List<string>> GetProviderImagesAsync();
+    /// <returns>false = Start חדש יותר כבר העלה את ה-revision (superseded)</returns>
+    Task<bool> FinishStartAsync(Guid phoneId, int revision, string dockerStatus,
+        string? containerId = null, string? containerName = null,
+        int? apiPort = null, int? wsPort = null, string? dockerUrl = null, string? errorMessage = null);
+
     // Host operations
     Task<DbHost?> GetOrCreateHostAsync(string hostName, string ipAddress, string? externalIp, int portRangeStart, int portRangeEnd, int maxContainers);
    // Task UpdateHostHeartbeatAsync(Guid hostId);
@@ -145,6 +165,57 @@ public class SupabaseService : ISupabaseService
         };
 
         _client = new Client(url, key, options);
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // Start RPC
+    // ════════════════════════════════════════════════════════════════
+    public async Task<StartPrepareResult> PrepareStartAsync(Guid phoneId, Guid hostId, string startingStatus)
+    {
+        var res = await _client.Rpc("start_phone_prepare", new Dictionary<string, object>
+        {
+            ["p_phone_id"]        = phoneId,
+            ["p_host_id"]         = hostId,
+            ["p_status_starting"] = startingStatus,
+        });
+
+        var result = JsonSerializer.Deserialize<StartPrepareResult>(res.Content ?? "null")
+                     ?? throw new InvalidOperationException("start_phone_prepare returned empty result");
+
+        _logger.LogInformation("[RPC] prepare phone={PhoneId} rev={Rev} provider={Provider} image={Image} usedPorts={Used}",
+            phoneId, result.Revision, result.Provider, result.Image, result.UsedApiPorts.Count);
+        return result;
+    }
+
+    public async Task<List<string>> GetProviderImagesAsync()
+    {
+        var res = await _client.Rpc("provider_images", null);
+        return JsonSerializer.Deserialize<List<string>>(res.Content ?? "[]") ?? new List<string>();
+    }
+
+    public async Task<bool> FinishStartAsync(Guid phoneId, int revision, string dockerStatus,
+        string? containerId = null, string? containerName = null,
+        int? apiPort = null, int? wsPort = null, string? dockerUrl = null, string? errorMessage = null)
+    {
+        var res = await _client.Rpc("start_phone_finish", new Dictionary<string, object?>
+        {
+            ["p_phone_id"]       = phoneId,
+            ["p_revision"]       = revision,
+            ["p_docker_status"]  = dockerStatus,
+            ["p_container_id"]   = containerId,
+            ["p_container_name"] = containerName,
+            ["p_api_port"]       = apiPort,
+            ["p_ws_port"]        = wsPort,
+            ["p_docker_url"]     = dockerUrl,
+            ["p_error"]          = errorMessage,
+        });
+
+        var applied = (res.Content ?? "").Trim().Equals("true", StringComparison.OrdinalIgnoreCase);
+        if (applied)
+            _logger.LogInformation("[RPC] finish phone={PhoneId} rev={Rev} status={Status}", phoneId, revision, dockerStatus);
+        else
+            _logger.LogWarning("[RPC] finish phone={PhoneId} rev={Rev} SUPERSEDED — newer revision exists", phoneId, revision);
+        return applied;
     }
 
 public async Task<List<PhoneTemplate>> GetPhoneTemplatesAsync(Guid phoneId)
@@ -676,8 +747,8 @@ public async Task UpdateHostHeartbeatAsync(Guid hostId, HostMetrics? metrics = n
 
         try
         {
+            // מספר ייחודי בכל המערכת (unique index phones_number_unique)
             var existing = await _client.From<Phone>()
-                .Where(p => p.UserId == userId)
                 .Where(p => p.Number == clean || p.Number == withPlus)
                 .Limit(1)
                 .Get();
@@ -685,6 +756,9 @@ public async Task UpdateHostHeartbeatAsync(Guid hostId, HostMetrics? metrics = n
             if (existing.Models.Any())
             {
                 var phone = existing.Models.First();
+                if (phone.UserId != userId)
+                    throw new InvalidOperationException($"Phone number {withPlus} is already registered to another user");
+
                 _logger.LogInformation("[PROVISION] Phone {Number} already exists for user {UserId} → id={Id}",
                     clean, userId, phone.Id);
                 return (phone, false);
@@ -1184,6 +1258,19 @@ public async Task UpdateHostHeartbeatAsync(Guid hostId, HostMetrics? metrics = n
             var phone = await GetPhoneByIdAsync(phoneId);
             if (phone != null && phone.Number != phoneNumber)
             {
+                var clean = new string(phoneNumber.Where(char.IsDigit).ToArray());
+                var taken = await _client.From<Phone>()
+                    .Filter("number", Supabase.Postgrest.Constants.Operator.In, new List<string> { clean, "+" + clean })
+                    .Filter("id", Supabase.Postgrest.Constants.Operator.NotEqual, phoneId.ToString())
+                    .Limit(1)
+                    .Get();
+                if (taken.Models.Any())
+                {
+                    _logger.LogError("Phone number {Number} already belongs to phone {OtherId} — not updating {PhoneId}",
+                        phoneNumber, taken.Models[0].Id, phoneId);
+                    return;
+                }
+
                 phone.Number = phoneNumber;
                 await _client.From<Phone>().Update(phone);
                 _logger.LogInformation("Updated phone {PhoneId} number to {Number}", phoneId, phoneNumber);

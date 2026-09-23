@@ -9,7 +9,7 @@ public interface IDockerService
 {
     Task<bool> PullImageAsync(string imageName);
    // Task<string?> CreateAndStartContainerAsync(Phone phone, int fastApiPort, int baileysPort, int authRevision = 0);
-    Task<string?> CreateAndStartContainerAsync(Phone phone, int fastApiPort, int baileysPort, int authRevision = 0, string maskedUsername = "****user");
+    Task<string?> CreateAndStartContainerAsync(Phone phone, int fastApiPort, int baileysPort, int authRevision = 0, string maskedUsername = "****user", string? imageName = null);
     Task<bool> StopContainerAsync(string containerId);
     Task<bool> RemoveContainerAsync(string containerId);
     Task<ContainerInspectResponse?> InspectContainerAsync(string containerId);
@@ -136,12 +136,14 @@ public class DockerService : IDockerService, IDisposable
         }
     }
 
-    public async Task<string?> CreateAndStartContainerAsync(Phone phone, int fastApiPort, int baileysPort, int authRevision = 0, string maskedUsername = "****user")
+    public async Task<string?> CreateAndStartContainerAsync(Phone phone, int fastApiPort, int baileysPort, int authRevision = 0, string maskedUsername = "****user", string? imageName = null)
     {
         try
         {
-            _logger.LogInformation("[DOCKER] Creating container | phone={Phone} fastApi={FastApi} baileys={Baileys}",
-                phone.Number, fastApiPort, baileysPort);
+            var image = string.IsNullOrWhiteSpace(imageName) ? _dockerSettings.ImageName : imageName;   // image לפי provider
+
+            _logger.LogInformation("[DOCKER] Creating container | phone={Phone} image={Image} fastApi={FastApi} baileys={Baileys}",
+                phone.Number, image, fastApiPort, baileysPort);
 
             var containerName = PhonePathHelper.ContainerName(phone.Number, phone.Id);
             var basePath      = _dockerSettings.DataBasePath;
@@ -169,7 +171,7 @@ public class DockerService : IDockerService, IDisposable
             var createResponse = await _client.Containers
                 .CreateContainerAsync(new CreateContainerParameters
                 {
-                    Image = _dockerSettings.ImageName,
+                    Image = image,
                     Name  = containerName,
                     Env   = new List<string>
                         {
@@ -209,6 +211,7 @@ public class DockerService : IDockerService, IDisposable
                         { "app",          "whatsapp-manager" },
                         { "phone_id",     phone.Id.ToString() },
                         { "phone_number", phone.Number },
+                        { "image",        image },
                         { "fastapi_port", fastApiPort.ToString() },
                         { "baileys_port", baileysPort.ToString() }
                     }

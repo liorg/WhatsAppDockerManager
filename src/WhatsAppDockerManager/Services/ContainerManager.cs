@@ -1,3 +1,6 @@
+using System.Collections.Concurrent;
+using System.Diagnostics;
+using System.Net.Http.Json;
 using WhatsAppDockerManager.Configuration;
 using WhatsAppDockerManager.Models;
 using DbHost = WhatsAppDockerManager.Models.Host;
@@ -15,40 +18,63 @@ public interface IContainerManager
     Task TakeOverFromDeadHostAsync(Guid deadHostId);
     Guid? CurrentHostId { get; }
     Task<bool> PausePhoneContainerAsync(Phone phone);
-    string? CurrentImageDigest { get; }  // ← חדש: גרסת ה-image הנוכחית
+    string? CurrentImageDigest { get; }
 }
 
 public class ContainerManager : IContainerManager
 {
     private readonly IDockerService _dockerService;
+    private readonly IImageCacheService _imageCache;
     private readonly ISupabaseService _supabaseService;
     private readonly IConfiguration _configuration;
     private readonly ILogger<ContainerManager> _logger;
     private readonly HostSettings _hostSettings;
     private readonly DockerSettings _dockerSettings;
-    
+
     private DbHost? _currentHost;
     private bool _initialized;
     private readonly SemaphoreSlim _initLock = new(1, 1);
     private readonly SemaphoreSlim _syncLock = new(1, 1);
 
-    // ── Image info — מתאכלס אחרי pull ──────────────────────────────
+    // ── פרפורמנס ────────────────────────────────────────────────────
+    // HttpClient אחד משותף — במקום new HttpClient בכל קריאה (socket exhaustion)
+    private static readonly HttpClient _http = new(new SocketsHttpHandler
+    {
+        PooledConnectionLifetime = TimeSpan.FromMinutes(5),
+        ConnectTimeout           = TimeSpan.FromSeconds(2),
+    })
+    { Timeout = TimeSpan.FromSeconds(10) };
+
+    // כמה containers עולים במקביל (Sync / HealthCheck / TakeOver)
+    private readonly int _maxParallelStarts;
+    // זמן מקסימלי להמתנה ל-container מוכן (במקום Task.Delay(8000) קבוע)
+    private readonly int _readyTimeoutSeconds;
+
+    // שמירת פורטים בזיכרון — מונע התנגשות פורטים כשמעלים במקביל
+    private readonly SemaphoreSlim _portLock = new(1, 1);
+    private readonly ConcurrentDictionary<Guid, (int Fa, int Ba)> _portReservations = new();
+
     public Guid?   CurrentHostId      => _currentHost?.Id;
     public string? CurrentImageDigest { get; private set; }
     private DateTime? _currentImageCreated;
 
     public ContainerManager(
         IDockerService dockerService,
+        IImageCacheService imageCache,
         ISupabaseService supabaseService,
         IConfiguration configuration,
         ILogger<ContainerManager> logger)
     {
         _dockerService   = dockerService;
+        _imageCache      = imageCache;
         _supabaseService = supabaseService;
         _configuration   = configuration;
         _logger          = logger;
         _hostSettings    = configuration.GetSection("AppSettings:Host").Get<HostSettings>() ?? new();
         _dockerSettings  = configuration.GetSection("AppSettings:Docker").Get<DockerSettings>() ?? new();
+
+        _maxParallelStarts   = Math.Max(1, configuration.GetValue<int?>("AppSettings:Docker:MaxParallelStarts") ?? 4);
+        _readyTimeoutSeconds = Math.Max(5, configuration.GetValue<int?>("AppSettings:Docker:ReadyTimeoutSeconds") ?? 45);
     }
 
     public async Task InitializeAsync()
@@ -60,7 +86,6 @@ public class ContainerManager : IContainerManager
 
             _logger.LogInformation("[CONTAINER] Initializing Container Manager...");
 
-            // ── זיהוי HostName אוטומטי ───────────────────────────
             var hostName = _hostSettings.HostName;
             if (string.IsNullOrEmpty(hostName))
             {
@@ -68,7 +93,6 @@ public class ContainerManager : IContainerManager
                 _logger.LogInformation("[CONTAINER] Detected host name: {HostName}", hostName);
             }
 
-            // ── זיהוי IP מקומי אוטומטי ──────────────────────────
             var localIp = _hostSettings.IpAddress;
             if (string.IsNullOrEmpty(localIp) || localIp == "0.0.0.0")
             {
@@ -86,14 +110,13 @@ public class ContainerManager : IContainerManager
                 }
             }
 
-            // ── זיהוי IP חיצוני אוטומטי ─────────────────────────
             var externalIp = _hostSettings.ExternalIp;
             if (string.IsNullOrEmpty(externalIp))
             {
                 try
                 {
-                    using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
-                    externalIp = (await http.GetStringAsync("http://checkip.amazonaws.com")).Trim();
+                    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                    externalIp = (await _http.GetStringAsync("http://checkip.amazonaws.com", cts.Token)).Trim();
                     _logger.LogInformation("[CONTAINER] Detected external IP: {ExternalIp}", externalIp);
                 }
                 catch (Exception ex)
@@ -115,43 +138,26 @@ public class ContainerManager : IContainerManager
             await _dockerService.EnsureNetworkExistsAsync("whatsapp_network");
             await _dockerService.EnsureRedisContainerRunningAsync();
 
-            // ════════════════════════════════════════════════════════
-            // PULL — תמיד מביא את הגרסה העדכנית ביותר
-            // ════════════════════════════════════════════════════════
-            _logger.LogInformation("[CONTAINER] Pulling latest image: {Image}", _dockerSettings.ImageName);
-            try
-            {
-                var pullSuccess = await _dockerService.PullImageAsync(_dockerSettings.ImageName);
-                if (pullSuccess)
-                    _logger.LogInformation("[CONTAINER]     ✅ Image pulled successfully: {Image}", _dockerSettings.ImageName);
-                else
-                    _logger.LogWarning("[CONTAINER] ⚠️ Pull returned false for {Image} — using cached version", _dockerSettings.ImageName);
-            }
-            catch (Exception ex)
-            {
-                // pull נכשל — לא עוצרים, ממשיכים עם image קיים
-                _logger.LogWarning(ex, "[CONTAINER] ⚠️ Pull failed for {Image} — continuing with cached version", _dockerSettings.ImageName);
-            }
+            // ── Images: לפי טבלת providers. משתמשים ב-cache מיד;
+            //    pull חוסם רק ל-image שחסר. העדכון השוטף — ImageCacheService (ברקע) ────
+            var imgSw  = Stopwatch.StartNew();
+            var images = await _supabaseService.GetProviderImagesAsync();
+            var cached = await Task.WhenAll(images.Select(i => _imageCache.EnsureCachedAsync(i)));
 
-            // ── שמור image info אחרי pull ─────────────────────────
-            try
+            for (var i = 0; i < images.Count; i++)
+                if (!cached[i])
+                    _logger.LogError("[CONTAINER] ❌ Image {Image} not available (no cache, pull failed)", images[i]);
+
+            var mainImage = images.FirstOrDefault(i => i.StartsWith(_dockerSettings.ImageName.Split(':')[0] + ":"))
+                            ?? images.FirstOrDefault();
+            var imageInfo = mainImage != null ? await _imageCache.GetInfoAsync(mainImage) : null;
+            if (imageInfo != null)
             {
-                var imageInfo = await _dockerService.GetImageInfoAsync(_dockerSettings.ImageName);
-                if (imageInfo != null)
-                {
-                    CurrentImageDigest    = imageInfo.Id;
-                    _currentImageCreated  = imageInfo.Created;
-                    _logger.LogInformation(
-                        "[CONTAINER] 📦 Image version: {ShortDigest} | created: {Created}",
-                        imageInfo.Id?[..Math.Min(20, imageInfo.Id?.Length ?? 0)],
-                        imageInfo.Created.ToString("yyyy-MM-dd HH:mm:ss UTC"));
-                }
+                CurrentImageDigest   = imageInfo.Id;
+                _currentImageCreated = imageInfo.Created;
             }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "[CONTAINER] Could not retrieve image info for {Image}", _dockerSettings.ImageName);
-            }
-            // ════════════════════════════════════════════════════════
+            _logger.LogInformation("[CONTAINER] 📦 {Count} provider images ready in {Ms}ms: {Images}",
+                cached.Count(c => c), imgSw.ElapsedMilliseconds, string.Join(", ", images));
 
             await SyncContainersAsync();
 
@@ -172,99 +178,144 @@ public class ContainerManager : IContainerManager
             return false;
         }
 
+        var hostId        = _currentHost.Id;
+        var sw            = Stopwatch.StartNew();
+        var containerName = PhonePathHelper.ContainerName(phone.Number, phone.Id);
+        string? containerId = null;
+        string? dockerUrl   = null;
+        int fastApiPort = 0, baileysPort = 0;
+        int revision    = 0;
+
         try
         {
-
             _logger.LogInformation("[CONTAINER] Starting container for phone {PhoneNumber}", phone.Number);
 
-            if (phone.HostId == null)
-            {
-                _logger.LogInformation("[CONTAINER] Assigning phone {PhoneNumber} to host {HostId}", phone.Number, _currentHost.Id);
-                await _supabaseService.AssignPhoneToHostAsync(phone.Id, _currentHost.Id);
-                phone.HostId = _currentHost.Id;
-            }
+            // ── RPC 1: host + Starting + revision+1 + ports + masked user ──
+            var prep = await _supabaseService.PrepareStartAsync(phone.Id, hostId, PhoneDockerStatus.Starting);
 
-            await _supabaseService.UpdatePhoneDockerStatusAsync(phone.Id, PhoneDockerStatus.Starting);
+            revision           = prep.Revision;
+            phone.HostId       = prep.HostId;
+            phone.AuthRevision = revision;
 
-            var allPhones   = await _supabaseService.GetPhonesForHostAsync(_currentHost.Id);
-            var otherPhones = allPhones.Where(p => p.Id != phone.Id).ToList();
-            var usedFa      = otherPhones.Where(p => p.ApiPort.HasValue).Select(p => p.ApiPort!.Value);
-            var usedBa      = otherPhones.Where(p => p.WsPort.HasValue).Select(p => p.WsPort!.Value);
-            var (fastApiPort, baileysPort) = PortHashCalculator.GetBothPortsUnique(phone.Id, usedFa, usedBa, _configuration);
-
-            // ── עצור containers ישנים של אותו מספר ──────────────────────
-            // מונע concurrency: שני containers עם אותו מספר לא ירוצו במקביל
-            if (!string.IsNullOrEmpty(phone.Number))
-            {
-                var allPhonesSameNumber = await _supabaseService.GetPhonesByNumberAsync(phone.Number);
-                foreach (var oldPhone in allPhonesSameNumber.Where(p => p.Id != phone.Id && !string.IsNullOrEmpty(p.ContainerId)))
-                {
-                    _logger.LogWarning("[CONTAINER] Stopping existing container for same number {Number} (phone={OldId})",
-                        phone.Number, oldPhone.Id);
-                    await _dockerService.StopContainerAsync(oldPhone.ContainerId!);
-                    await _dockerService.RemoveContainerAsync(oldPhone.ContainerId!);
-                    await _supabaseService.UpdatePhoneDockerStatusAsync(oldPhone.Id, PhoneDockerStatus.Stopped,
-                        containerId: "", containerName: "", dockerUrl: "");
-                    await _supabaseService.SetPhoneStatusAsync(oldPhone.Id, "inactive");
-                }
-            }
+            // image לפי provider — מה-cache (pull רק אם חסר)
+            if (!await _imageCache.EnsureCachedAsync(prep.Image))
+                throw new InvalidOperationException($"Image {prep.Image} not available");
 
             if (!string.IsNullOrEmpty(phone.CredsBase64))
                 await RestoreCredsAsync(phone);
 
+            (fastApiPort, baileysPort) = await ReservePortsAsync(phone.Id, prep.UsedApiPorts, prep.UsedWsPorts);
 
-            // כאן להוסיף
-           // ── הגדל revision לפני הפעלת container ──────────────────────────
-             //var revision = await _supabaseService.IncrementPhoneRevisionAsync(phone.Id);
-            // ── קח max revision מכל phones עם אותו מספר, הקפץ ב-1 ──────────
-            var maxRevision = !string.IsNullOrEmpty(phone.Number)
-                ? await _supabaseService.GetMaxRevisionByNumberAsync(phone.Number)
-                : 0;
-            var revision = maxRevision + 1;
-            await _supabaseService.SetPhoneRevisionAsync(phone.Id, revision);
+            _logger.LogInformation("[CONTAINER] provider={Provider} image={Image} revision={Rev} user={User} prep={Ms}ms",
+                prep.Provider, prep.Image, revision, prep.MaskedUser, sw.ElapsedMilliseconds);
 
-         var maskedUser = phone.UserId.HasValue  ? await _supabaseService.GetMaskedUsernameAsync(phone.UserId.Value) : "****anon";
-
-            _logger.LogInformation("[CONTAINER] revision={Rev} user={User}", revision, maskedUser);
-
-            var containerId = await _dockerService.CreateAndStartContainerAsync(phone, fastApiPort, baileysPort, revision, maskedUser);
-
-            //var containerId = await _dockerService.CreateAndStartContainerAsync(phone, fastApiPort, baileysPort,revision);
+            containerId = await _dockerService.CreateAndStartContainerAsync(
+                phone, fastApiPort, baileysPort, revision, prep.MaskedUser, prep.Image);
 
             if (containerId == null)
             {
-                await _supabaseService.UpdatePhoneDockerStatusAsync(phone.Id, PhoneDockerStatus.Error, errorMessage: "Failed to create container");
-                await _supabaseService.LogAgentEventAsync(_currentHost.Id, AgentEventType.Error, new { phoneId = phone.Id, error = "Failed to create container" });
+                _portReservations.TryRemove(phone.Id, out _);
+                await _supabaseService.FinishStartAsync(phone.Id, revision, PhoneDockerStatus.Error,
+                    errorMessage: "Failed to create container");
                 return false;
             }
 
             var host = !string.IsNullOrEmpty(_hostSettings.ExternalIp) ? _hostSettings.ExternalIp
                      : !string.IsNullOrEmpty(_hostSettings.IpAddress)  ? _hostSettings.IpAddress
                      : "localhost";
-            var dockerUrl = $"http://{host}:{fastApiPort}";
+            dockerUrl = $"http://{host}:{fastApiPort}";
 
-            await _supabaseService.UpdatePhoneDockerStatusAsync(
-                phone.Id, PhoneDockerStatus.Running,
-                containerId:   containerId,
-                containerName: PhonePathHelper.ContainerName(phone.Number, phone.Id),
-                apiPort:       fastApiPort,
-                dockerUrl:     dockerUrl);
+            phone.ContainerId = containerId;
+            phone.ApiPort     = fastApiPort;
+            phone.WsPort      = baileysPort;
 
-            await RegisterWebhookInContainerAsync(fastApiPort, phone.Id);
-            await ReSendAuthIfConnectedAsync(fastApiPort, phone.Id);
+            // ── ממתינים לסיום אמיתי: ready → webhook → resend-auth ──────────
+            var (ok, error) = await PostStartAsync(phone.Id, fastApiPort);
 
-            await _supabaseService.LogAgentEventAsync(_currentHost.Id, AgentEventType.Started,
-                new { phoneId = phone.Id, containerId, fastApiPort, baileysPort, dockerUrl });
+            // ── RPC 2: סטטוס סופי — רק אם ה-revision עדיין שלנו ──────────
+            var applied = await _supabaseService.FinishStartAsync(phone.Id, revision,
+                ok ? PhoneDockerStatus.Running : PhoneDockerStatus.Error,
+                containerId, containerName, fastApiPort, baileysPort, dockerUrl,
+                errorMessage: error);
 
-            _logger.LogInformation("[CONTAINER] Container started for phone {PhoneNumber} FastAPI:{FastApi} Baileys:{Baileys}",
-                phone.Number, fastApiPort, baileysPort);
-            return true;
+            if (!applied)
+            {
+                // Start חדש יותר של אותו טלפון כבר רץ — ה-container שלנו מיותר
+                _logger.LogWarning("[CONTAINER] Phone {PhoneNumber} rev={Rev} superseded — removing {ContainerId}",
+                    phone.Number, revision, containerId);
+                await RemoveOwnContainerAsync(phone.Id, containerId);
+                return false;
+            }
+
+            if (!ok)
+                await RemoveOwnContainerAsync(phone.Id, containerId);   // לא משאירים container חצי-חי עם revision תקף
+
+            if (ok)
+                _logger.LogInformation("[CONTAINER] ✅ Phone {PhoneNumber} READY (webhook registered) FastAPI:{FastApi} Baileys:{Baileys} in {Ms}ms",
+                    phone.Number, fastApiPort, baileysPort, sw.ElapsedMilliseconds);
+            else
+                _logger.LogError("[CONTAINER] ❌ Phone {PhoneNumber} start FAILED after {Ms}ms: {Error}",
+                    phone.Number, sw.ElapsedMilliseconds, error);
+
+            return ok;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "[CONTAINER] Error starting container for phone {PhoneNumber}", phone.Number);
-            await _supabaseService.UpdatePhoneDockerStatusAsync(phone.Id, PhoneDockerStatus.Error, errorMessage: ex.Message);
+            _logger.LogError(ex, "[CONTAINER] ❌ Error starting container for phone {PhoneNumber} after {Ms}ms",
+                phone.Number, sw.ElapsedMilliseconds);
+            if (containerId != null)
+                await RemoveOwnContainerAsync(phone.Id, containerId);
+
+            try
+            {
+                if (revision > 0)   // prepare הצליח → יש revision לגדר
+                    await _supabaseService.FinishStartAsync(phone.Id, revision, PhoneDockerStatus.Error, errorMessage: ex.Message);
+                else
+                    await _supabaseService.UpdatePhoneDockerStatusAsync(phone.Id, PhoneDockerStatus.Error, errorMessage: ex.Message);
+            }
+            catch (Exception rpcEx)
+            {
+                _logger.LogError(rpcEx, "[CONTAINER] start_phone_finish failed for {PhoneId}", phone.Id);
+            }
             return false;
+        }
+    }
+
+    private async Task RemoveOwnContainerAsync(Guid phoneId, string? containerId)
+    {
+        _portReservations.TryRemove(phoneId, out _);
+        if (string.IsNullOrEmpty(containerId)) return;
+        try
+        {
+            await _dockerService.StopContainerAsync(containerId);
+            await _dockerService.RemoveContainerAsync(containerId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[CONTAINER] Failed removing container {ContainerId}", containerId);
+        }
+    }
+
+    /// <summary>
+    /// הקצאת פורטים תחת נעילה + שמירה בזיכרון, כך ש-starts מקביליים
+    /// לא יקבלו את אותו פורט לפני שה-DB התעדכן.
+    /// </summary>
+    private async Task<(int Fa, int Ba)> ReservePortsAsync(Guid phoneId, IEnumerable<int> dbUsedFa, IEnumerable<int> dbUsedBa)
+    {
+        await _portLock.WaitAsync();
+        try
+        {
+            var reservedOthers = _portReservations.Where(kv => kv.Key != phoneId).Select(kv => kv.Value).ToList();
+            var usedFa = dbUsedFa.Concat(reservedOthers.Select(r => r.Fa)).ToHashSet();
+            var usedBa = dbUsedBa.Concat(reservedOthers.Select(r => r.Ba)).ToHashSet();
+
+            var ports = PortHashCalculator.GetBothPortsUnique(phoneId, usedFa, usedBa, _configuration);
+            _portReservations[phoneId] = ports;
+            return ports;
+        }
+        finally
+        {
+            _portLock.Release();
         }
     }
 
@@ -272,7 +323,6 @@ public class ContainerManager : IContainerManager
     {
         try
         {
-            var phoneIndex = phone.Number.Replace("+", "");
             var authPath = PhonePathHelper.AuthPath(_dockerSettings.DataBasePath, phone.Id);
             Directory.CreateDirectory(authPath);
             var credsBytes = Convert.FromBase64String(phone.CredsBase64!);
@@ -286,72 +336,121 @@ public class ContainerManager : IContainerManager
         }
     }
 
-    private async Task RegisterWebhookInContainerAsync(int fastApiPort, Guid phoneId)
+    // ════════════════════════════════════════════════════════════════
+    // Post-start: readiness polling → webhook → resend-auth
+    // ════════════════════════════════════════════════════════════════
+    private async Task<(bool Ok, string? Error)> PostStartAsync(Guid phoneId, int fastApiPort)
     {
+        var sw = Stopwatch.StartNew();
         try
         {
-            await Task.Delay(8000);
-            using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
-            var host           = "172.17.0.1";
-            var managerWebhook = $"http://{host}:5000/api/webhook/container-event/{phoneId}";
-            var payload        = new { url = managerWebhook, secret = "manager-secret" };
+            var ready = await WaitForContainerReadyAsync(fastApiPort, TimeSpan.FromSeconds(_readyTimeoutSeconds));
+            if (!ready)
+                return (false, $"Container not ready after {_readyTimeoutSeconds}s");
 
+            _logger.LogInformation("[CONTAINER] Phone {PhoneId} ready in {Ms}ms", phoneId, sw.ElapsedMilliseconds);
+
+            if (!await RegisterWebhookInContainerAsync(fastApiPort, phoneId))
+                return (false, "Webhook registration failed");
+
+            // בדיקה אחרי הרישום: אם כבר connected — אירוע ה-creds כבר עבר בלי webhook → resend.
+            // אם יתחבר אחרי הרישום — האירוע יגיע כרגיל.
+            await ReSendAuthIfConnectedAsync(fastApiPort, phoneId);
+
+            _logger.LogInformation("[CONTAINER] Post-start done for {PhoneId} in {Ms}ms", phoneId, sw.ElapsedMilliseconds);
+            return (true, null);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[CONTAINER] Post-start failed for phone {PhoneId}", phoneId);
+            return (false, ex.Message);
+        }
+    }
+
+    private async Task<bool> WaitForContainerReadyAsync(int port, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        var delayMs  = 250;
+
+        while (DateTime.UtcNow < deadline)
+        {
             try
             {
-                var listResponse = await httpClient.GetAsync($"http://localhost:{fastApiPort}/webhooks");
-                if (listResponse.IsSuccessStatusCode)
-                {
-                    var listJson = await listResponse.Content.ReadFromJsonAsync<WebhookListResponse>();
-                    if (listJson?.Webhooks != null)
-                    {
-                        foreach (var wh in listJson.Webhooks)
-                        {
-                            //if (wh.Contains("container-event"))
-                            if (wh.Contains("container-event") && !wh.Contains(phoneId.ToString()))  // מחק רק זרים
-                            {
-                                try
-                                {
-                                    var delReq = new HttpRequestMessage(HttpMethod.Delete, $"http://localhost:{fastApiPort}/webhooks/unregister");
-                                    delReq.Content = JsonContent.Create(new { url = wh });
-                                    await httpClient.SendAsync(delReq);
-                                    _logger.LogInformation("Unregistered stale webhook: {Url}", wh);
-                                }
-                                catch { }
-                            }
-                        }
-                    }
-                }
+                using var cts  = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+                using var resp = await _http.GetAsync($"http://localhost:{port}/status", cts.Token);
+                if (resp.IsSuccessStatusCode) return true;
             }
-            catch (Exception ex) { _logger.LogWarning("Could not clean webhooks: {Msg}", ex.Message); }
+            catch { /* עדיין עולה */ }
 
-            for (int attempt = 1; attempt <= 3; attempt++)
+            await Task.Delay(delayMs);
+            delayMs = Math.Min(delayMs * 2, 1000);
+        }
+        return false;
+    }
+
+    private async Task<bool> RegisterWebhookInContainerAsync(int fastApiPort, Guid phoneId)
+    {
+        var baseUrl        = $"http://localhost:{fastApiPort}";
+        var managerWebhook = $"http://172.17.0.1:5000/api/webhook/container-event/{phoneId}";
+        var payload        = new { url = managerWebhook, secret = "manager-secret" };
+
+        try
+        {
+            var list  = await _http.GetFromJsonAsync<WebhookListResponse>($"{baseUrl}/webhooks");
+            var stale = list?.Webhooks?
+                .Where(wh => wh.Contains("container-event") && !wh.Contains(phoneId.ToString()))
+                .ToList() ?? new List<string>();
+
+            await Task.WhenAll(stale.Select(async wh =>
             {
                 try
                 {
-                    var response = await httpClient.PostAsJsonAsync($"http://localhost:{fastApiPort}/webhooks/register", payload);
-                    if (response.IsSuccessStatusCode)
+                    using var req = new HttpRequestMessage(HttpMethod.Delete, $"{baseUrl}/webhooks/unregister")
                     {
-                        _logger.LogInformation("Webhook registered for phone {PhoneId} port {Port}", phoneId, fastApiPort);
-                        return;
-                    }
+                        Content = JsonContent.Create(new { url = wh })
+                    };
+                    using var _ = await _http.SendAsync(req);
+                    _logger.LogInformation("Unregistered stale webhook: {Url}", wh);
                 }
-                catch (Exception ex) { _logger.LogWarning("Webhook registration attempt {Attempt} error: {Message}", attempt, ex.Message); }
-                if (attempt < 3) await Task.Delay(5000);
-            }
+                catch { }
+            }));
         }
-        catch (Exception ex) { _logger.LogWarning(ex, "Could not register webhook for phone {PhoneId}", phoneId); }
+        catch (Exception ex) { _logger.LogWarning("Could not clean webhooks: {Msg}", ex.Message); }
+
+        for (int attempt = 1; attempt <= 5; attempt++)
+        {
+            try
+            {
+                using var response = await _http.PostAsJsonAsync($"{baseUrl}/webhooks/register", payload);
+                if (response.IsSuccessStatusCode)
+                {
+                    _logger.LogInformation("Webhook registered for phone {PhoneId} port {Port} (attempt {Attempt})",
+                        phoneId, fastApiPort, attempt);
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning("Webhook registration attempt {Attempt} error: {Message}", attempt, ex.Message);
+            }
+            await Task.Delay(300 * attempt);
+        }
+
+        _logger.LogWarning("Could not register webhook for phone {PhoneId}", phoneId);
+        return false;
     }
 
-    private async Task ReSendAuthIfConnectedAsync(int baileysPort, Guid phoneId)
+    private async Task ReSendAuthIfConnectedAsync(int fastApiPort, Guid phoneId)
     {
         try
         {
-            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
-            var res = await http.GetFromJsonAsync<ContainerStatusResponse>($"http://localhost:{baileysPort}/status");
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var res = await _http.GetFromJsonAsync<ContainerStatusResponse>(
+                $"http://localhost:{fastApiPort}/status", cts.Token);
             if (res?.Status == "connected")
             {
                 _logger.LogInformation("[CONTAINER] Container already connected, requesting creds resend for {PhoneId}", phoneId);
-                await http.PostAsync($"http://localhost:{baileysPort}/resend-auth", null);
+                using var _ = await _http.PostAsync($"http://localhost:{fastApiPort}/resend-auth", null, cts.Token);
             }
         }
         catch (Exception ex) { _logger.LogWarning(ex, "[CONTAINER] Could not resend auth for phone {PhoneId}", phoneId); }
@@ -366,8 +465,6 @@ public class ContainerManager : IContainerManager
             if (success)
             {
                 await _supabaseService.UpdatePhoneDockerStatusAsync(phone.Id, PhoneDockerStatus.Stopped);
-                _logger.LogInformation("[CONTAINER] Logging agent event for stopped phone {PhoneId}", phone.Id);
-                await _supabaseService.LogAgentEventAsync(_currentHost?.Id, AgentEventType.Stopped, new { phoneId = phone.Id });
             }
             return success;
         }
@@ -376,74 +473,83 @@ public class ContainerManager : IContainerManager
 
     public async Task<bool> RestartPhoneContainerAsync(Phone phone)
     {
-        _logger.LogInformation("[CONTAINER] Restarting phone {PhoneNumber} (id={PhoneId})",
-            phone.Number, phone.Id);
+        _logger.LogInformation("[CONTAINER] Restarting phone {PhoneNumber} (id={PhoneId})", phone.Number, phone.Id);
 
-        // ── 1. עצור והסר ────────────────────────────────────────
         if (!string.IsNullOrEmpty(phone.ContainerId))
         {
-            _logger.LogInformation("[CONTAINER] Stopping container {ContainerId}", phone.ContainerId);
             await _dockerService.StopContainerAsync(phone.ContainerId);
-            _logger.LogInformation("[CONTAINER] Removing container {ContainerId}", phone.ContainerId);
             await _dockerService.RemoveContainerAsync(phone.ContainerId);
         }
         else
         {
-            // אולי container קיים בשם אבל ללא ID ב-DB
             var expectedName = PhonePathHelper.ContainerName(phone.Number, phone.Id);
             _logger.LogWarning("[CONTAINER] No containerId in DB — trying by name: {Name}", expectedName);
             await _dockerService.RemoveContainerByNameAsync(expectedName);
         }
 
-        // ── 2. נקה ID לפני Start ─────────────────────────────────
         phone.ContainerId = null;
 
-        // ── 3. הפעל מחדש ────────────────────────────────────────
-        _logger.LogInformation("[CONTAINER] Starting fresh container for phone {PhoneNumber}", phone.Number);
         var result = await StartPhoneContainerAsync(phone);
-
         _logger.LogInformation("[CONTAINER] Restart {Result} for phone {PhoneNumber}",
             result ? "✓ succeeded" : "✗ failed", phone.Number);
-
         return result;
     }
 
     public async Task SyncContainersAsync()
     {
         if (_currentHost == null) return;
+        var hostId = _currentHost.Id;
+
         await _syncLock.WaitAsync();
         try
         {
+            var sw = Stopwatch.StartNew();
             _logger.LogInformation("[CONTAINER] Syncing containers with database...");
-            var phones = await _supabaseService.GetPhonesForHostAsync(_currentHost.Id);
-            var runningContainers   = await _dockerService.ListContainersAsync(all: true);
-            var runningContainerIds = runningContainers.Where(c => c.State == "running").Select(c => c.ID).ToHashSet();
+
+            var phonesTask     = _supabaseService.GetPhonesForHostAsync(hostId);
+            var containersTask = _dockerService.ListContainersAsync(all: true);
+            var orphansTask    = _supabaseService.GetOrphanedPhonesAsync();
+            await Task.WhenAll(phonesTask, containersTask, orphansTask);
+
+            var phones              = phonesTask.Result;
+            var runningContainerIds = containersTask.Result.Where(c => c.State == "running").Select(c => c.ID).ToHashSet();
+
+            var jobs = new List<Func<Task>>();
+            var ok   = 0;
+            var fail = 0;
+            void Count(bool r) { if (r) Interlocked.Increment(ref ok); else Interlocked.Increment(ref fail); }
 
             foreach (var phone in phones)
             {
                 if (phone.DockerStatus == PhoneDockerStatus.Running && !string.IsNullOrEmpty(phone.ContainerId) && !runningContainerIds.Contains(phone.ContainerId))
                 {
                     _logger.LogWarning("[CONTAINER] Container for phone {PhoneNumber} is not running, restarting...", phone.Number);
-                    await RestartPhoneContainerAsync(phone);
+                    jobs.Add(async () => Count(await RestartPhoneContainerAsync(phone)));
                 }
                 else if (phone.DockerStatus == PhoneDockerStatus.Pending || phone.DockerStatus == PhoneDockerStatus.Unknown)
                 {
                     _logger.LogInformation("[CONTAINER] Starting pending phone {PhoneNumber}", phone.Number);
-                    await StartPhoneContainerAsync(phone);
+                    jobs.Add(async () => Count(await StartPhoneContainerAsync(phone)));
                 }
             }
 
-            var orphanedPhones = await _supabaseService.GetOrphanedPhonesAsync();
-            var currentCount   = phones.Count;
-            foreach (var phone in orphanedPhones)
+            var currentCount = phones.Count;
+            foreach (var orphan in orphansTask.Result)
             {
-                if (currentCount >= _hostSettings.MaxContainers) { _logger.LogWarning("[CONTAINER] Host at capacity ({Max}), cannot claim more phones", _hostSettings.MaxContainers); break; }
-                _logger.LogInformation("[CONTAINER] Claiming orphaned phone {PhoneNumber}", phone.Number);
-                await _supabaseService.AssignPhoneToHostAsync(phone.Id, _currentHost.Id);
-                await StartPhoneContainerAsync(phone);
+                if (currentCount >= _hostSettings.MaxContainers)
+                {
+                    _logger.LogWarning("[CONTAINER] Host at capacity ({Max}), cannot claim more phones", _hostSettings.MaxContainers);
+                    break;
+                }
+                _logger.LogInformation("[CONTAINER] Claiming orphaned phone {PhoneNumber}", orphan.Number);
+                jobs.Add(async () => Count(await StartPhoneContainerAsync(orphan)));
                 currentCount++;
             }
-            _logger.LogInformation("[CONTAINER] Container sync completed. Managing {Count} phones", currentCount);
+
+            await RunThrottledAsync(jobs);
+
+            _logger.LogInformation("[CONTAINER] ✅ Sync completed: {Ok} ready, {Fail} failed, {Count} managed, in {Ms}ms",
+                ok, fail, currentCount, sw.ElapsedMilliseconds);
         }
         finally { _syncLock.Release(); }
     }
@@ -451,24 +557,29 @@ public class ContainerManager : IContainerManager
     public async Task HealthCheckAllAsync()
     {
         if (_currentHost == null) return;
+        var hostId = _currentHost.Id;
         try
         {
-            var phones = await _supabaseService.GetPhonesForHostAsync(_currentHost.Id);
-            foreach (var phone in phones.Where(p => p.DockerStatus == PhoneDockerStatus.Running))
-            {
-                if (string.IsNullOrEmpty(phone.ContainerId) || !phone.ApiPort.HasValue) continue;
-                var isHealthy = await _dockerService.CheckHealthAsync(phone.ContainerId, phone.ApiPort.Value);
-                if (!isHealthy)
+            var phones = await _supabaseService.GetPhonesForHostAsync(hostId);
+
+            var jobs = phones
+                .Where(p => p.DockerStatus == PhoneDockerStatus.Running && !string.IsNullOrEmpty(p.ContainerId) && p.ApiPort.HasValue)
+                .Select(phone => (Func<Task>)(async () =>
                 {
-                    _logger.LogWarning("[CONTAINER] Phone {PhoneNumber} failed health check", phone.Number);
-                    await _supabaseService.LogAgentEventAsync(_currentHost.Id, AgentEventType.HealthCheckFailed, new { phoneId = phone.Id });
-                    await RestartPhoneContainerAsync(phone);
-                }
-                else
-                {
-                    await _supabaseService.UpdatePhoneDockerStatusAsync(phone.Id, PhoneDockerStatus.Running);
-                }
-            }
+                    var isHealthy = await _dockerService.CheckHealthAsync(phone.ContainerId!, phone.ApiPort!.Value);
+                    if (!isHealthy)
+                    {
+                        _logger.LogWarning("[CONTAINER] Phone {PhoneNumber} failed health check", phone.Number);
+                        await RestartPhoneContainerAsync(phone);
+                    }
+                    else
+                    {
+                        await _supabaseService.UpdatePhoneDockerStatusAsync(phone.Id, PhoneDockerStatus.Running);
+                    }
+                }))
+                .ToList();
+
+            await RunThrottledAsync(jobs);
         }
         catch (Exception ex) { _logger.LogError(ex, "[CONTAINER] Error during health check"); }
     }
@@ -476,38 +587,34 @@ public class ContainerManager : IContainerManager
     public async Task TakeOverFromDeadHostAsync(Guid deadHostId)
     {
         if (_currentHost == null) return;
+        var hostId = _currentHost.Id;
         try
         {
             _logger.LogWarning("[CONTAINER] Taking over phones from dead host {DeadHostId}", deadHostId);
-            var phones       = await _supabaseService.GetPhonesForHostAsync(deadHostId);
-            var currentCount = (await _supabaseService.GetPhonesForHostAsync(_currentHost.Id)).Count;
-            var takenOver    = new List<Guid>();
-            var skipped      = new List<Guid>();
 
-            foreach (var phone in phones)
+            var deadTask = _supabaseService.GetPhonesForHostAsync(deadHostId);
+            var mineTask = _supabaseService.GetPhonesForHostAsync(hostId);
+            await Task.WhenAll(deadTask, mineTask);
+
+            var phones   = deadTask.Result;
+            var capacity = Math.Max(0, _hostSettings.MaxContainers - mineTask.Result.Count);
+            var toTake   = phones.Take(capacity).ToList();
+            var takenOver = new ConcurrentBag<Guid>();
+
+            var jobs = toTake.Select(phone => (Func<Task>)(async () =>
             {
-                if (currentCount >= _hostSettings.MaxContainers) { skipped.Add(phone.Id); continue; }
-                try
-                {
-                    await _supabaseService.AssignPhoneToHostAsync(phone.Id, _currentHost.Id);
-                    var hasCredentials = !string.IsNullOrEmpty(phone.CredsBase64);
-                    if (hasCredentials) await RestoreCredsAsync(phone);
-                    var started = await StartPhoneContainerAsync(phone);
-                    if (started)
-                    {
-                        takenOver.Add(phone.Id);
-                        _logger.LogInformation("[CONTAINER] Taking over phone {PhoneNumber}", phone.Number);
-                        await _supabaseService.LogAgentEventAsync(_currentHost.Id, AgentEventType.Migrated,
-                            new { action = "takeover", phoneId = phone.Id, phoneNumber = phone.Number, fromHostId = deadHostId, toHostId = _currentHost.Id, hadCredentials = hasCredentials, timestamp = DateTime.UtcNow });
-                        currentCount++;
-                    }
-                }
-                catch (Exception phoneEx) { _logger.LogError(phoneEx, "[CONTAINER] Error taking over phone {PhoneNumber}", phone.Number); }
-            }
+                await _supabaseService.AssignPhoneToHostAsync(phone.Id, hostId);
+                phone.HostId = hostId;
+                var started = await StartPhoneContainerAsync(phone);
+                if (!started) return;
+
+                takenOver.Add(phone.Id);
+                _logger.LogInformation("[CONTAINER] Taking over phone {PhoneNumber}", phone.Number);
+            })).ToList();
+
+            await RunThrottledAsync(jobs);
 
             await _supabaseService.SetHostStatusAsync(deadHostId, "inactive");
-            await _supabaseService.LogAgentEventAsync(_currentHost.Id, AgentEventType.Migrated,
-                new { action = "takeover_summary", fromHostId = deadHostId, toHostId = _currentHost.Id, totalPhones = phones.Count, takenOver = takenOver.Count, skipped = skipped.Count, timestamp = DateTime.UtcNow });
 
             _logger.LogInformation("[CONTAINER] Takeover complete: {TakenOver}/{Total} phones from host {DeadHostId}", takenOver.Count, phones.Count, deadHostId);
         }
@@ -526,11 +633,11 @@ public class ContainerManager : IContainerManager
                 await _dockerService.RemoveContainerAsync(phone.ContainerId);
             }
 
+            _portReservations.TryRemove(phone.Id, out _);
             PhonePathHelper.DeleteDirectories(_dockerSettings.DataBasePath, phone.Id);
 
             await _supabaseService.UpdatePhoneDockerStatusAsync(phone.Id, PhoneDockerStatus.Stopped, containerId: "", containerName: "", dockerUrl: "");
             await _supabaseService.DetachPhoneFromHostAsync(phone.Id);
-            await _supabaseService.LogAgentEventAsync(_currentHost.Id, AgentEventType.Stopped, new { phoneId = phone.Id, action = "pause", phoneNumber = phone.Number });
 
             _logger.LogInformation("[CONTAINER] Phone {PhoneNumber} paused and detached from host", phone.Number);
             return true;
@@ -541,6 +648,19 @@ public class ContainerManager : IContainerManager
             await _supabaseService.UpdatePhoneDockerStatusAsync(phone.Id, PhoneDockerStatus.Error, errorMessage: ex.Message);
             return false;
         }
+    }
+
+    // ── הרצה מקבילית עם הגבלה ─────────────────────────────────────────
+    private async Task RunThrottledAsync(IEnumerable<Func<Task>> jobs)
+    {
+        using var gate = new SemaphoreSlim(_maxParallelStarts);
+        await Task.WhenAll(jobs.Select(async job =>
+        {
+            await gate.WaitAsync();
+            try { await job(); }
+            catch (Exception ex) { _logger.LogError(ex, "[CONTAINER] Parallel job failed"); }
+            finally { gate.Release(); }
+        }));
     }
 }
 
