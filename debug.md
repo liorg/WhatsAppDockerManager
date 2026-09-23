@@ -249,35 +249,176 @@ docker rm whatsapp_972546252491_8e0b80f9
 ```bash
 DO $$
 DECLARE
-    v_phone_id uuid := '8e0b80f9-1534-436f-950d-256783582428';
-    r RECORD;
+    v_phone_id uuid := '1ff94cfa-a381-4606-8bbc-f0d36abe8005';
 BEGIN
-    FOR r IN
-        SELECT
-            c.table_schema,
-            c.table_name
-        FROM information_schema.columns c
-        JOIN information_schema.tables t
-          ON t.table_schema = c.table_schema
-         AND t.table_name = c.table_name
-        WHERE c.column_name = 'phone_id'
-          AND c.table_schema = 'public'
-          AND t.table_type = 'BASE TABLE'
-          AND c.table_name <> 'phones'
-    LOOP
-        RAISE NOTICE 'Deleting from %.%', r.table_schema, r.table_name;
 
-        EXECUTE format(
-            'DELETE FROM %I.%I WHERE phone_id::text = $1::text',
-            r.table_schema,
-            r.table_name
-        )
-        USING v_phone_id;
-    END LOOP;
+    ------------------------------------------------------------
+    -- 1. execution_links
+    -- תלוי ב-phone / contact / scenario / schedule
+    ------------------------------------------------------------
+    DELETE FROM public.execution_links
+    WHERE phone_id = v_phone_id
+       OR contact_id IN (
+            SELECT id FROM public.contacts
+            WHERE phone_id = v_phone_id
+       )
+       OR scenario_id IN (
+            SELECT id FROM public.scenarios
+            WHERE phone_id = v_phone_id
+       )
+       OR schedule_id IN (
+            SELECT id FROM public.schedules
+            WHERE phone_id = v_phone_id
+       );
 
-    -- phones תמיד אחרונה
+
+    ------------------------------------------------------------
+    -- 2. webhook_messages
+    ------------------------------------------------------------
+    DELETE FROM public.webhook_messages
+    WHERE phone_id = v_phone_id
+       OR contact_id IN (
+            SELECT id FROM public.contacts
+            WHERE phone_id = v_phone_id
+       )
+       OR call_id IN (
+            SELECT id FROM public.calls
+            WHERE phone_id = v_phone_id
+       );
+
+
+    ------------------------------------------------------------
+    -- 3. ping_sender
+    ------------------------------------------------------------
+    DELETE FROM public.ping_sender
+    WHERE phone_id = v_phone_id
+       OR contact_id IN (
+            SELECT id FROM public.contacts
+            WHERE phone_id = v_phone_id
+       );
+
+
+    ------------------------------------------------------------
+    -- 4. messages
+    ------------------------------------------------------------
+    DELETE FROM public.messages
+    WHERE phone_id = v_phone_id
+       OR contact_id IN (
+            SELECT id FROM public.contacts
+            WHERE phone_id = v_phone_id
+       )
+       OR call_id IN (
+            SELECT id FROM public.calls
+            WHERE phone_id = v_phone_id
+       );
+
+
+    ------------------------------------------------------------
+    -- 5. scenario_runs
+    ------------------------------------------------------------
+    DELETE FROM public.scenario_runs
+    WHERE phone_id = v_phone_id
+       OR call_id IN (
+            SELECT id FROM public.calls
+            WHERE phone_id = v_phone_id
+       )
+       OR scenario_id IN (
+            SELECT id FROM public.scenarios
+            WHERE phone_id = v_phone_id
+       );
+
+
+    ------------------------------------------------------------
+    -- 6. message_events
+    ------------------------------------------------------------
+    DELETE FROM public.message_events
+    WHERE phone_id = v_phone_id;
+
+
+    ------------------------------------------------------------
+    -- 7. phone_provisioning_events
+    ------------------------------------------------------------
+    DELETE FROM public.phone_provisioning_events
+    WHERE phone_id = v_phone_id;
+
+
+    ------------------------------------------------------------
+    -- 8. calls
+    -- messages כבר טופלו
+    ------------------------------------------------------------
+    DELETE FROM public.calls
+    WHERE phone_id = v_phone_id;
+
+
+    ------------------------------------------------------------
+    -- 9. schedules
+    ------------------------------------------------------------
+    DELETE FROM public.schedules
+    WHERE phone_id = v_phone_id;
+
+
+    ------------------------------------------------------------
+    -- 10. scenario self references
+    ------------------------------------------------------------
+    UPDATE public.scenarios
+    SET source_scenario_id = NULL
+    WHERE source_scenario_id IN (
+        SELECT id
+        FROM public.scenarios
+        WHERE phone_id = v_phone_id
+    );
+
+
+    ------------------------------------------------------------
+    -- 11. scenarios
+    ------------------------------------------------------------
+    DELETE FROM public.scenarios
+    WHERE phone_id = v_phone_id;
+
+
+    ------------------------------------------------------------
+    -- 12. contacts self references
+    ------------------------------------------------------------
+    UPDATE public.contacts
+    SET parent_contact_id = NULL
+    WHERE parent_contact_id IN (
+        SELECT id
+        FROM public.contacts
+        WHERE phone_id = v_phone_id
+    );
+
+
+    ------------------------------------------------------------
+    -- 13. contacts
+    ------------------------------------------------------------
+    DELETE FROM public.contacts
+    WHERE phone_id = v_phone_id;
+
+
+    ------------------------------------------------------------
+    -- 14. שאר הטבלאות הישירות
+    ------------------------------------------------------------
+    DELETE FROM public.phone_templates
+    WHERE phone_id = v_phone_id;
+
+    DELETE FROM public.sender_log
+    WHERE phone_id = v_phone_id;
+
+    -- notifications מוגדר SET NULL,
+    -- אבל אם רוצים ניקוי מלא של נתוני הבדיקה נמחק אותן.
+    DELETE FROM public.notifications
+    WHERE phone_id = v_phone_id;
+
+
+    ------------------------------------------------------------
+    -- 15. phone עצמו — אחרון
+    ------------------------------------------------------------
     DELETE FROM public.phones
     WHERE id = v_phone_id;
+
+
+    RAISE NOTICE 'Phone % and related test data deleted successfully',
+        v_phone_id;
 
 END $$;
 ```
