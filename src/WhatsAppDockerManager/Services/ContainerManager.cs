@@ -161,6 +161,13 @@ public class ContainerManager : IContainerManager
 
             await SyncContainersAsync();
 
+            // ── pull אחד ברקע אחרי שה-containers עלו מה-cache — מעדכן ל-restart הבא ──
+            _ = Task.Run(async () =>
+            {
+                try { await _imageCache.PrepullAllAsync(); }
+                catch (Exception ex) { _logger.LogWarning(ex, "[CONTAINER] Background prepull failed"); }
+            });
+
             _initialized = true;
             _logger.LogInformation("[CONTAINER] Container Manager initialized successfully");
         }
