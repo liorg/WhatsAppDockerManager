@@ -226,3 +226,51 @@ curl -X POST localhost:9369/send/text -H 'Content-Type: application/json' \
 
 
 אם התור משתחרר מיד אחרי — יש לך עקיפה שלא דורשת restart בכלל, ואפשר להפוך אותה לאוטומטית (heartbeat יוצא כל X דקות). זה שווה הרבה יותר מ-restart ידני.
+
+### delete phone
+
+
+bash```
+select container_name from phones where id='8e0b80f9-1534-436f-950d-256783582428'
+
+  ```
+delete containers whatsapp_972546252491_8e0b80f9
+
+```bash
+docker ps -a --format "table {{.Names}}\t{{.Status}}\t{{.Image}}"
+```
+```bash
+docker stop  whatsapp_972546252491_8e0b80f9
+docker rm whatsapp_972546252491_8e0b80f9
+```
+
+
+bash```
+DO $$
+DECLARE
+    v_phone_id uuid := '8e0b80f9-1534-436f-950d-256783582428';
+    r RECORD;
+BEGIN
+    FOR r IN
+        SELECT table_schema, table_name
+        FROM information_schema.columns
+        WHERE column_name = 'phone_id'
+          AND table_schema = 'public'
+          AND table_name <> 'phones'
+    LOOP
+        RAISE NOTICE 'Deleting from %.%', r.table_schema, r.table_name;
+
+        EXECUTE format(
+            'DELETE FROM %I.%I WHERE phone_id = $1',
+            r.table_schema,
+            r.table_name
+        )
+        USING v_phone_id;
+    END LOOP;
+
+    -- phones נמחקת אחרונה
+    DELETE FROM public.phones
+    WHERE id = v_phone_id;
+
+END $$;
+```
