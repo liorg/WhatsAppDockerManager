@@ -253,23 +253,29 @@ DECLARE
     r RECORD;
 BEGIN
     FOR r IN
-        SELECT table_schema, table_name
-        FROM information_schema.columns
-        WHERE column_name = 'phone_id'
-          AND table_schema = 'public'
-          AND table_name <> 'phones'
+        SELECT
+            c.table_schema,
+            c.table_name
+        FROM information_schema.columns c
+        JOIN information_schema.tables t
+          ON t.table_schema = c.table_schema
+         AND t.table_name = c.table_name
+        WHERE c.column_name = 'phone_id'
+          AND c.table_schema = 'public'
+          AND t.table_type = 'BASE TABLE'
+          AND c.table_name <> 'phones'
     LOOP
         RAISE NOTICE 'Deleting from %.%', r.table_schema, r.table_name;
 
         EXECUTE format(
-            'DELETE FROM %I.%I WHERE phone_id = $1',
+            'DELETE FROM %I.%I WHERE phone_id::text = $1::text',
             r.table_schema,
             r.table_name
         )
         USING v_phone_id;
     END LOOP;
 
-    -- phones נמחקת אחרונה
+    -- phones תמיד אחרונה
     DELETE FROM public.phones
     WHERE id = v_phone_id;
 
