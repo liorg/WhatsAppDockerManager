@@ -33,6 +33,10 @@ builder.Services.AddSingleton<IWebhookDispatcherService, WebhookDispatcherServic
 builder.Services.AddHostedService<HeartbeatService>();
 builder.Services.AddHostedService<TemplateStatusSyncService>();
 
+builder.Services.AddSingleton<ImageCacheService>();
+builder.Services.AddSingleton<IImageCacheService>(sp => sp.GetRequiredService<ImageCacheService>());
+builder.Services.AddHostedService(sp => sp.GetRequiredService<ImageCacheService>());
+
 builder.Services.AddHttpClient();
 
 builder.Services.AddControllers()
