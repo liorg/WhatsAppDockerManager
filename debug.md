@@ -239,13 +239,14 @@ delete containers whatsapp_972546252491_8e0b80f9
 ```bash
 docker ps -a --format "table {{.Names}}\t{{.Status}}\t{{.Image}}"
 ```
+
+
 ```bash
 docker stop  whatsapp_972546252491_8e0b80f9
 docker rm whatsapp_972546252491_8e0b80f9
 ```
 
-
-bash```
+```bash
 DO $$
 DECLARE
     v_phone_id uuid := '8e0b80f9-1534-436f-950d-256783582428';
