@@ -187,6 +187,7 @@ public class ContainerManager : IContainerManager
 
         var hostId        = _currentHost.Id;
         var sw            = Stopwatch.StartNew();
+        var t             = new StepTimer();
         var containerName = PhonePathHelper.ContainerName(phone.Number, phone.Id);
         string? containerId = null;
         string? dockerUrl   = null;
@@ -199,6 +200,7 @@ public class ContainerManager : IContainerManager
 
             // ── RPC 1: host + Starting + revision+1 + ports + masked user ──
             var prep = await _supabaseService.PrepareStartAsync(phone.Id, hostId, PhoneDockerStatus.Starting);
+            t.Mark("prepare_rpc");
 
             revision           = prep.Revision;
             phone.HostId       = prep.HostId;
@@ -207,17 +209,21 @@ public class ContainerManager : IContainerManager
             // image לפי provider — מה-cache (pull רק אם חסר)
             if (!await _imageCache.EnsureCachedAsync(prep.Image))
                 throw new InvalidOperationException($"Image {prep.Image} not available");
+            t.Mark("image");
 
             if (!string.IsNullOrEmpty(phone.CredsBase64))
                 await RestoreCredsAsync(phone);
+            t.Mark("creds");
 
             (fastApiPort, baileysPort) = await ReservePortsAsync(phone.Id, prep.UsedApiPorts, prep.UsedWsPorts);
+            t.Mark("ports");
 
             _logger.LogInformation("[CONTAINER] provider={Provider} image={Image} revision={Rev} user={User} prep={Ms}ms",
                 prep.Provider, prep.Image, revision, prep.MaskedUser, sw.ElapsedMilliseconds);
 
             containerId = await _dockerService.CreateAndStartContainerAsync(
                 phone, fastApiPort, baileysPort, revision, prep.MaskedUser, prep.Image);
+            t.Mark("docker_create");
 
             if (containerId == null)
             {
@@ -237,13 +243,15 @@ public class ContainerManager : IContainerManager
             phone.WsPort      = baileysPort;
 
             // ── ממתינים לסיום אמיתי: ready → webhook → resend-auth ──────────
-            var (ok, error) = await PostStartAsync(phone.Id, fastApiPort);
+            var (ok, error) = await PostStartAsync(phone.Id, fastApiPort, t);
 
             // ── RPC 2: סטטוס סופי — רק אם ה-revision עדיין שלנו ──────────
             var applied = await _supabaseService.FinishStartAsync(phone.Id, revision,
                 ok ? PhoneDockerStatus.Running : PhoneDockerStatus.Error,
                 containerId, containerName, fastApiPort, baileysPort, dockerUrl,
                 errorMessage: error);
+            t.Mark("finish_rpc");
+            _logger.LogInformation("[TIMING] phone={PhoneNumber} ok={Ok} {Steps}", phone.Number, ok, t);
 
             if (!applied)
             {
@@ -270,6 +278,7 @@ public class ContainerManager : IContainerManager
         {
             _logger.LogError(ex, "[CONTAINER] ❌ Error starting container for phone {PhoneNumber} after {Ms}ms",
                 phone.Number, sw.ElapsedMilliseconds);
+            _logger.LogInformation("[TIMING] phone={PhoneNumber} ok=False (exception) {Steps}", phone.Number, t);
             if (containerId != null)
                 await RemoveOwnContainerAsync(phone.Id, containerId);
 
@@ -294,8 +303,7 @@ public class ContainerManager : IContainerManager
         if (string.IsNullOrEmpty(containerId)) return;
         try
         {
-            await _dockerService.StopContainerAsync(containerId);
-            await _dockerService.RemoveContainerAsync(containerId);
+            await _dockerService.RemoveContainerAsync(containerId);   // Force — בלי המתנת stop
         }
         catch (Exception ex)
         {
@@ -346,23 +354,27 @@ public class ContainerManager : IContainerManager
     // ════════════════════════════════════════════════════════════════
     // Post-start: readiness polling → webhook → resend-auth
     // ════════════════════════════════════════════════════════════════
-    private async Task<(bool Ok, string? Error)> PostStartAsync(Guid phoneId, int fastApiPort)
+    private async Task<(bool Ok, string? Error)> PostStartAsync(Guid phoneId, int fastApiPort, StepTimer t)
     {
         var sw = Stopwatch.StartNew();
         try
         {
-            var ready = await WaitForContainerReadyAsync(fastApiPort, TimeSpan.FromSeconds(_readyTimeoutSeconds));
+            var (ready, attempts) = await WaitForContainerReadyAsync(fastApiPort, TimeSpan.FromSeconds(_readyTimeoutSeconds));
+            t.Mark($"wait_ready({attempts}x)");
             if (!ready)
                 return (false, $"Container not ready after {_readyTimeoutSeconds}s");
 
-            _logger.LogInformation("[CONTAINER] Phone {PhoneId} ready in {Ms}ms", phoneId, sw.ElapsedMilliseconds);
+            _logger.LogInformation("[CONTAINER] Phone {PhoneId} ready in {Ms}ms ({Attempts} polls)", phoneId, sw.ElapsedMilliseconds, attempts);
 
-            if (!await RegisterWebhookInContainerAsync(fastApiPort, phoneId))
+            var registered = await RegisterWebhookInContainerAsync(fastApiPort, phoneId);
+            t.Mark("webhook");
+            if (!registered)
                 return (false, "Webhook registration failed");
 
             // בדיקה אחרי הרישום: אם כבר connected — אירוע ה-creds כבר עבר בלי webhook → resend.
             // אם יתחבר אחרי הרישום — האירוע יגיע כרגיל.
             await ReSendAuthIfConnectedAsync(fastApiPort, phoneId);
+            t.Mark("resend_auth");
 
             _logger.LogInformation("[CONTAINER] Post-start done for {PhoneId} in {Ms}ms", phoneId, sw.ElapsedMilliseconds);
             return (true, null);
@@ -374,25 +386,27 @@ public class ContainerManager : IContainerManager
         }
     }
 
-    private async Task<bool> WaitForContainerReadyAsync(int port, TimeSpan timeout)
+    private async Task<(bool Ready, int Attempts)> WaitForContainerReadyAsync(int port, TimeSpan timeout)
     {
         var deadline = DateTime.UtcNow + timeout;
         var delayMs  = 250;
+        var attempts = 0;
 
         while (DateTime.UtcNow < deadline)
         {
+            attempts++;
             try
             {
                 using var cts  = new CancellationTokenSource(TimeSpan.FromSeconds(2));
                 using var resp = await _http.GetAsync($"http://localhost:{port}/status", cts.Token);
-                if (resp.IsSuccessStatusCode) return true;
+                if (resp.IsSuccessStatusCode) return (true, attempts);
             }
             catch { /* עדיין עולה */ }
 
             await Task.Delay(delayMs);
             delayMs = Math.Min(delayMs * 2, 1000);
         }
-        return false;
+        return (false, attempts);
     }
 
     private async Task<bool> RegisterWebhookInContainerAsync(int fastApiPort, Guid phoneId)
@@ -481,6 +495,7 @@ public class ContainerManager : IContainerManager
     public async Task<bool> RestartPhoneContainerAsync(Phone phone)
     {
         _logger.LogInformation("[CONTAINER] Restarting phone {PhoneNumber} (id={PhoneId})", phone.Number, phone.Id);
+        var rsw = Stopwatch.StartNew();
 
         if (!string.IsNullOrEmpty(phone.ContainerId))
         {
@@ -495,6 +510,7 @@ public class ContainerManager : IContainerManager
         }
 
         phone.ContainerId = null;
+        _logger.LogInformation("[TIMING] phone={PhoneNumber} restart_stop_remove={Ms}ms", phone.Number, rsw.ElapsedMilliseconds);
 
         var result = await StartPhoneContainerAsync(phone);
         _logger.LogInformation("[CONTAINER] Restart {Result} for phone {PhoneNumber}",
@@ -663,7 +679,10 @@ public class ContainerManager : IContainerManager
         using var gate = new SemaphoreSlim(_maxParallelStarts);
         await Task.WhenAll(jobs.Select(async job =>
         {
+            var qsw = Stopwatch.StartNew();
             await gate.WaitAsync();
+            if (qsw.ElapsedMilliseconds > 500)
+                _logger.LogInformation("[TIMING] job waited {Ms}ms in queue (MaxParallelStarts={Max})", qsw.ElapsedMilliseconds, _maxParallelStarts);
             try { await job(); }
             catch (Exception ex) { _logger.LogError(ex, "[CONTAINER] Parallel job failed"); }
             finally { gate.Release(); }
@@ -673,3 +692,25 @@ public class ContainerManager : IContainerManager
 
 record ContainerStatusResponse(string Status);
 record WebhookListResponse(List<string> Webhooks, int Count);
+
+/// <summary>מדידת שלבים: "prepare_rpc=120ms image=3ms ... total=5400ms"</summary>
+internal sealed class StepTimer
+{
+    private readonly Stopwatch _sw = Stopwatch.StartNew();
+    private readonly List<(string Name, long Ms)> _steps = new();
+    private long _last;
+
+    public void Mark(string name)
+    {
+        var now = _sw.ElapsedMilliseconds;
+        _steps.Add((name, now - _last));
+        _last = now;
+    }
+
+    public override string ToString()
+    {
+        var slowest = _steps.Count > 0 ? _steps.MaxBy(s => s.Ms).Name : "-";
+        return string.Join(" ", _steps.Select(s => $"{s.Name}={s.Ms}ms"))
+             + $" | total={_sw.ElapsedMilliseconds}ms slowest={slowest}";
+    }
+}

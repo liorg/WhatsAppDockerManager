@@ -1,6 +1,13 @@
 #!/bin/bash
 set -e
 
+# --- Load env ---
+if [ -f /opt/myapp/shared/.env ]; then
+  set -a
+  source /opt/myapp/shared/.env
+  set +a
+fi
+
 # --- Ensure data dirs ---
 mkdir -p /opt/myapp/data/redis
 
@@ -11,12 +18,36 @@ BASE_DIR="/opt/myapp"
 RELEASES_DIR="$BASE_DIR/releases"
 CURRENT_LINK="$BASE_DIR/current"
 VERSION_FILE="$BASE_DIR/current_version"
+MANAGER_URL="${MANAGER_URL:-http://localhost:5000}"
 
 mkdir -p "$RELEASES_DIR"
 
-LATEST_TAG=$(curl -s "https://api.github.com/repos/$REPO/releases/latest" | jq -r .tag_name)
+# --- Pre-pull: ה-Manager הרץ מושך את כל ה-images של providers (טבלת providers) ---
+prepull_images() {
+  echo "Pre-pulling provider images via Manager ($MANAGER_URL)..."
+  if RESP=$(curl -fsS -m 900 -X POST "$MANAGER_URL/api/images/prepull" 2>&1); then
+    echo "$RESP" | jq -r '.results[] | "  \(if .ok then (if .updated then "⬆️ updated " else "✅ up to date" end) else "❌ failed    " end)  \(.image)"' 2>/dev/null \
+      || echo "  $RESP"
+  else
+    echo "WARN: prepull failed — continuing with cached images ($RESP)"
+  fi
+}
+
+if [ -z "$GITHUB_TOKEN" ]; then
+  echo "GITHUB_TOKEN is missing"
+  exit 1
+fi
+
+LATEST_JSON=$(curl -s \
+  -H "Authorization: Bearer $GITHUB_TOKEN" \
+  -H "Accept: application/vnd.github+json" \
+  "https://api.github.com/repos/$REPO/releases/latest")
+
+LATEST_TAG=$(echo "$LATEST_JSON" | jq -r .tag_name)
+
 if [ "$LATEST_TAG" = "null" ] || [ -z "$LATEST_TAG" ]; then
   echo "No latest release found"
+  echo "$LATEST_JSON" | jq
   exit 1
 fi
 
@@ -30,14 +61,17 @@ echo "Latest:  $LATEST_TAG"
 
 if [ "$CURRENT_VERSION" = "$LATEST_TAG" ]; then
   echo "Already up to date"
+  # גם כשאין release חדש — מוודאים שה-images ב-cache עדכניים
+  prepull_images
   exit 0
 fi
 
-ZIP_URL=$(curl -s "https://api.github.com/repos/$REPO/releases/latest" \
-  | jq -r '.assets[] | select(.name | endswith(".zip")) | .browser_download_url' \
+# --- ZIP asset (private repo: הורדה דרך ה-API עם token) ---
+ASSET_URL=$(echo "$LATEST_JSON" \
+  | jq -r '.assets[] | select(.name | endswith(".zip")) | .url' \
   | head -n 1)
 
-if [ -z "$ZIP_URL" ]; then
+if [ -z "$ASSET_URL" ] || [ "$ASSET_URL" = "null" ]; then
   echo "No ZIP asset found"
   exit 1
 fi
@@ -45,18 +79,25 @@ fi
 TARGET_DIR="$RELEASES_DIR/$LATEST_TAG"
 TMP_ZIP=$(mktemp "/tmp/${APP_NAME}-${LATEST_TAG}.XXXXXX.zip")
 
-echo "Downloading $ZIP_URL"
-curl -L -o "$TMP_ZIP" "$ZIP_URL"
+echo "Downloading $ASSET_URL"
+curl -fL \
+  -H "Authorization: Bearer $GITHUB_TOKEN" \
+  -H "Accept: application/octet-stream" \
+  -o "$TMP_ZIP" "$ASSET_URL"
 
 rm -rf "$TARGET_DIR"
 mkdir -p "$TARGET_DIR"
 unzip -q "$TMP_ZIP" -d "$TARGET_DIR"
+rm -f "$TMP_ZIP"
 
 # --- fix publish folder ---
 if [ -d "$TARGET_DIR/publish" ]; then
   mv "$TARGET_DIR/publish"/* "$TARGET_DIR/"
   rm -rf "$TARGET_DIR/publish"
 fi
+
+# --- Pre-pull BEFORE switching: ה-Manager הישן עדיין רץ → restart ישתמש ב-cache עדכני ---
+prepull_images
 
 # --- fix symlink ---
 rm -rf "$CURRENT_LINK"

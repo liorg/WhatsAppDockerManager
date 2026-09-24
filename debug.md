@@ -422,3 +422,18 @@ BEGIN
 
 END $$;
 ```
+
+### אין צורך למחוק את הלוגים. מספיק לסמן את נקודת ההתחלה ולקרוא רק ממנה והלאה:
+
+```bash
+
+# 1. נקודת התחלה
+START=$(date '+%Y-%m-%d %H:%M:%S'); echo "$START"
+
+# 2. deploy / restart
+sudo systemctl restart whatsapp-manager
+
+# 3. מעקב חי אחרי הזמנים
+journalctl -u whatsapp-manager --since "$START" -f | grep --line-buffered -E "TIMING|
+
+```

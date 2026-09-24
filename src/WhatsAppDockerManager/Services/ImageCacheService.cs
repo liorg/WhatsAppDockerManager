@@ -17,17 +17,15 @@ public interface IImageCacheService
 }
 
 /// <summary>
-/// שומר את ה-images של כל ה-providers עדכניים ב-cache המקומי:
-///   • בעלייה — pull ברקע (לא חוסם את הקמת ה-containers)
-///   • כל ImagePrepullMinutes (ברירת מחדל 10)
+/// שומר את ה-images של כל ה-providers ב-cache המקומי (ללא timer):
+///   • בעלייה — pull פעם אחת ברקע, אחרי ש-InitializeAsync הקים containers מה-cache
 ///   • לפי דרישה — POST /api/images/prepull (update.sh)
 /// </summary>
-public class ImageCacheService : BackgroundService, IImageCacheService
+public class ImageCacheService : IImageCacheService
 {
     private readonly IDockerService   _docker;
     private readonly ISupabaseService _supabase;
     private readonly ILogger<ImageCacheService> _logger;
-    private readonly TimeSpan _interval;
 
     // pull אחד בכל פעם לכל image
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _locks = new();
@@ -35,28 +33,11 @@ public class ImageCacheService : BackgroundService, IImageCacheService
     public ImageCacheService(
         IDockerService docker,
         ISupabaseService supabase,
-        IConfiguration configuration,
         ILogger<ImageCacheService> logger)
     {
         _docker   = docker;
         _supabase = supabase;
         _logger   = logger;
-        _interval = TimeSpan.FromMinutes(Math.Max(1,
-            configuration.GetValue<int?>("AppSettings:Docker:ImagePrepullMinutes") ?? 10));
-    }
-
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
-    {
-        // השהיה קצרה — לתת ל-InitializeAsync להקים containers מה-cache קודם
-        try { await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken); } catch { return; }
-
-        while (!stoppingToken.IsCancellationRequested)
-        {
-            try { await PrepullAllAsync(stoppingToken); }
-            catch (Exception ex) { _logger.LogWarning(ex, "[IMAGES] Prepull cycle failed"); }
-
-            try { await Task.Delay(_interval, stoppingToken); } catch { return; }
-        }
     }
 
     public Task<DockerImageInfo?> GetInfoAsync(string image) => _docker.GetImageInfoAsync(image);
