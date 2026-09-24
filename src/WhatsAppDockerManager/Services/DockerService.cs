@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Docker.DotNet;
 using Docker.DotNet.Models;
 using WhatsAppDockerManager.Configuration;
@@ -40,6 +41,7 @@ public class DockerService : IDockerService, IDisposable
 
     private const string RedisContainerName = "redis_shared";
     private const string NetworkName        = "whatsapp_network";
+    private readonly uint _stopTimeoutSeconds;
 
     public DockerService(IConfiguration configuration, ILogger<DockerService> logger)
     {
@@ -47,6 +49,7 @@ public class DockerService : IDockerService, IDisposable
         _configuration  = configuration;
         _dockerSettings = configuration.GetSection("AppSettings:Docker").Get<DockerSettings>() ?? new();
         _hostSettings   = configuration.GetSection("AppSettings:Host").Get<HostSettings>() ?? new();
+        _stopTimeoutSeconds = (uint)Math.Max(0, configuration.GetValue<int?>("AppSettings:Docker:StopTimeoutSeconds") ?? 10);
 
         var dockerUri = GetDockerUri();
         _logger.LogInformation("Connecting to Docker at {Uri}", dockerUri);
@@ -138,6 +141,11 @@ public class DockerService : IDockerService, IDisposable
 
     public async Task<string?> CreateAndStartContainerAsync(Phone phone, int fastApiPort, int baileysPort, int authRevision = 0, string maskedUsername = "****user", string? imageName = null)
     {
+        var sw    = Stopwatch.StartNew();
+        long last = 0;
+        var steps = new List<string>();
+        void Mark(string n) { var now = sw.ElapsedMilliseconds; steps.Add($"{n}={now - last}ms"); last = now; }
+
         try
         {
             var image = string.IsNullOrWhiteSpace(imageName) ? _dockerSettings.ImageName : imageName;   // image לפי provider
@@ -155,16 +163,19 @@ public class DockerService : IDockerService, IDisposable
                 authPath, logsPath, contactsPath);
 
             PhonePathHelper.EnsureDirectoriesExist(basePath, phone.Id);
+            Mark("dirs");
 
             // הסר container קיים עם אותו שם
             var existingContainers = await _client.Containers
                 .ListContainersAsync(new ContainersListParameters { All = true });
             var existing = existingContainers.FirstOrDefault(c =>
                 c.Names.Any(n => n.TrimStart('/') == containerName));
+            Mark("list");
             if (existing != null)
             {
                 _logger.LogWarning("[DOCKER] Container {Name} already exists, removing...", containerName);
                 await RemoveContainerAsync(existing.ID);
+                Mark("remove_existing");
             }
             var ManagerUrl="http://172.17.0.1:5000";
 
@@ -217,10 +228,12 @@ public class DockerService : IDockerService, IDisposable
                     }
                 });
 
+            Mark("create");
             _logger.LogInformation("[DOCKER] Container {Name} created with ID {Id}", containerName, createResponse.ID);
 
             var started = await _client.Containers
                 .StartContainerAsync(createResponse.ID, new ContainerStartParameters());
+            Mark("start");
 
             if (!started)
             {
@@ -230,9 +243,12 @@ public class DockerService : IDockerService, IDisposable
 
             await _client.Networks.ConnectNetworkAsync(NetworkName,
                 new NetworkConnectParameters { Container = createResponse.ID });
+            Mark("network");
 
             _logger.LogInformation("[DOCKER] ✓ Container {Name} started. FastAPI:{FastApi} Baileys:{Baileys}",
                 containerName, fastApiPort, baileysPort);
+            _logger.LogInformation("[TIMING][DOCKER] {Name} {Steps} | total={Ms}ms",
+                containerName, string.Join(" ", steps), sw.ElapsedMilliseconds);
             return createResponse.ID;
         }
         catch (Exception ex)
@@ -246,9 +262,11 @@ public class DockerService : IDockerService, IDisposable
     {
         try
         {
+            var sw = Stopwatch.StartNew();
             await _client.Containers.StopContainerAsync(containerId,
-                new ContainerStopParameters { WaitBeforeKillSeconds = 10 });
-            _logger.LogInformation("Container {ContainerId} stopped", containerId);
+                new ContainerStopParameters { WaitBeforeKillSeconds = _stopTimeoutSeconds });
+            _logger.LogInformation("[TIMING][DOCKER] Container {ContainerId} stopped in {Ms}ms (timeout={Sec}s)",
+                containerId[..Math.Min(12, containerId.Length)], sw.ElapsedMilliseconds, _stopTimeoutSeconds);
             return true;
         }
         catch (Exception ex) { _logger.LogError(ex, "[DOCKER] Error stopping container {ContainerId}", containerId); return false; }
@@ -258,10 +276,12 @@ public class DockerService : IDockerService, IDisposable
     {
         try
         {
-            try { await StopContainerAsync(containerId); } catch { }
+            // Force=true — מסיר גם container רץ. בלי Stop נוסף (חסך עד StopTimeoutSeconds)
+            var sw = Stopwatch.StartNew();
             await _client.Containers.RemoveContainerAsync(containerId,
                 new ContainerRemoveParameters { Force = true, RemoveVolumes = false });
-            _logger.LogInformation("[DOCKER] Container {ContainerId} removed", containerId);
+            _logger.LogInformation("[TIMING][DOCKER] Container {ContainerId} removed in {Ms}ms",
+                containerId[..Math.Min(12, containerId.Length)], sw.ElapsedMilliseconds);
             return true;
         }
         catch (Exception ex) { _logger.LogError(ex, "[DOCKER] Error removing container {ContainerId}", containerId); return false; }

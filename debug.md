@@ -437,3 +437,10 @@ sudo systemctl restart whatsapp-manager
 journalctl -u whatsapp-manager --since "$START" -f | grep --line-buffered -E "TIMING|
 
 ```
+
+
+### אם אתה בכל זאת רוצה למחוק לגמרי: הפקודה הבאה מוחקת את כל לוגי ה-journal בשרת, לא רק של ה-Manager, ואין דרך לשחזר אותם:
+
+```bash
+sudo journalctl --rotate && sudo journalctl --vacuum-time=1s
+```
