@@ -213,6 +213,7 @@ public class DockerService : IDockerService, IDisposable
                             $"{logsPath}:/var/log",
                             $"{contactsPath}:/app/data"
                         },
+                        NetworkMode   = NetworkName,   // נוצר ישר על whatsapp_network — בלי connect נוסף
                         RestartPolicy = new RestartPolicy { Name = RestartPolicyKind.UnlessStopped },
                         Memory    = 512 * 1024 * 1024,
                         CPUShares = 512
@@ -240,10 +241,6 @@ public class DockerService : IDockerService, IDisposable
                 _logger.LogError("[DOCKER] Failed to start container {Name}", containerName);
                 return null;
             }
-
-            await _client.Networks.ConnectNetworkAsync(NetworkName,
-                new NetworkConnectParameters { Container = createResponse.ID });
-            Mark("network");
 
             _logger.LogInformation("[DOCKER] ✓ Container {Name} started. FastAPI:{FastApi} Baileys:{Baileys}",
                 containerName, fastApiPort, baileysPort);

@@ -389,7 +389,7 @@ public class ContainerManager : IContainerManager
     private async Task<(bool Ready, int Attempts)> WaitForContainerReadyAsync(int port, TimeSpan timeout)
     {
         var deadline = DateTime.UtcNow + timeout;
-        var delayMs  = 250;
+        const int delayMs = 200;   // polling קבוע — לא מפספסים את רגע ה-ready
         var attempts = 0;
 
         while (DateTime.UtcNow < deadline)
@@ -404,7 +404,6 @@ public class ContainerManager : IContainerManager
             catch { /* עדיין עולה */ }
 
             await Task.Delay(delayMs);
-            delayMs = Math.Min(delayMs * 2, 1000);
         }
         return (false, attempts);
     }
