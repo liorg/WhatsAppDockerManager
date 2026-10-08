@@ -121,6 +121,13 @@ public class PhonesController : ControllerBase
         if (!isValid)
             return BadRequest(new { error = validationError });
 
+        // ה-provider המבוקש נחשב **לפני** ה-create, כי הוא חייב להיכתב בשורה
+        // עצמה. בלעדיו השורה נוצרת עם ברירת המחדל של העמודה — baileys — ואז
+        // קם קונטיינר baileys לטלפון cloudapi: הוא עולה, נראה בריא, ואין לו
+        // override במטא ואין consumer. כשל שקט לחלוטין.
+        var reqProvider = string.IsNullOrWhiteSpace(request.Provider)
+            ? null : request.Provider.Trim().ToLowerInvariant();
+
         _logger.LogInformation("[PROVISION] ▶ Start | phone={Phone} user={UserId} provider={Provider}",
             normalizedPhone, request.UserId, request.Provider ?? "(from db)");
 
@@ -151,6 +158,7 @@ public class PhonesController : ControllerBase
                         Id = Guid.NewGuid(), Number = normalizedPhone!,
                         Label = request.Nickname, Color = request.Tag,
                         Status = "active", DockerStatus = PhoneDockerStatus.Pending,
+                        Provider = reqProvider ?? ProviderBaileys,
                     });
                     isNew = true;
                     _logger.LogInformation("[PROVISION] DB | created new phoneId={PhoneId}", phone.Id);
@@ -165,6 +173,19 @@ public class PhonesController : ControllerBase
 
         var provider = ResolveProvider(phone, request.Provider);
         _logger.LogInformation("[PROVISION] Provider | phoneId={PhoneId} provider={Provider}", phone.Id, provider);
+
+        // ── ההתמדה שחסרה ─────────────────────────────────────────────
+        // ResolveProvider חישב את ה-provider למסלול הנוכחי, אבל שום דבר לא
+        // כתב אותו לשורה. התוצאה: provision עם provider=cloudapi הקים
+        // קונטיינר cloudapi פעם אחת, ובכל restart אחר כך — ContainerManager
+        // קרא provider מה-DB, מצא baileys, והקים את הקונטיינר הלא נכון.
+        if (!string.Equals(provider, phone.Provider, StringComparison.OrdinalIgnoreCase))
+        {
+            _logger.LogInformation("[PROVISION] Provider | persisting {Old} → {New} | phoneId={PhoneId}",
+                phone.Provider ?? "(null)", provider, phone.Id);
+            await _supabaseService.SetPhoneProviderAsync(phone.Id, provider);
+            phone.Provider = provider;
+        }
 
         // ── 2. Compute ports by GUID ────────────────────────────────
         var (fastApiPort, baileysPort) = PortHashCalculator.GetBothPorts(phone.Id, _configuration);
@@ -345,7 +366,7 @@ public class PhonesController : ControllerBase
             {
                 PhoneId = phone.Id, PhoneNumber = normalizedPhone!,
                 Label = phone.Label, Color = phone.Color,
-                Provider = ProviderBaileys,
+                Provider = provider,
                 Port = fastApiPort, Status = "connected",
                 Message = "Phone is already connected",
             });
@@ -801,6 +822,7 @@ public record ProvisionRequest
     /// ממלאים כאן רק כדי לא לשבור מספר שהוגדר אחרת בעבר.
     /// </summary>
     public string? CloudVerifyToken { get; init; }
+
 }
 
 public record ProvisionResponse

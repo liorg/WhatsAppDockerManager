@@ -33,6 +33,53 @@ clear
  docker image prune -a
 ```
 
+REDIS?
+
+```bash
+sudo systemctl restart whatsapp-manager
+sleep 20 && docker exec whatsapp_972504476645_3beff8fa printenv REDIS_URL
+docker exec redis_shared redis-cli smembers webhooks:3beff8fa-4dc6-4a03-b70f-17a47fe09529
+
+```
+
+TEST BAILIES LOCAL AND HUB
+
+C=whatsapp_972504476645_3beff8fa
+```bash
+# 1 · הגרסה שהקונטיינר מדווח על עצמו
+docker exec $C printenv APP_VERSION
+curl -s localhost:8161/health | python3 -m json.tool 2>/dev/null | head -20
+
+# 2 · ה-image שבשימוש מול ה-latest המקומי — צריכים להיות זהים
+docker inspect $C --format 'container: {{.Image}}'
+docker image inspect liorgr/whatsapp-single:latest --format 'latest:    {{.Id}}'
+
+# 3 · ה-latest המקומי מול ה-Hub — זה אומר אם יש משהו חדש שלא נמשך
+docker image inspect liorgr/whatsapp-single:latest --format 'local:  {{index .RepoDigests 0}}'
+curl -s "https://hub.docker.com/v2/repositories/liorgr/whatsapp-single/tags/latest" \
+  | python3 -c "import json,sys;d=json.load(sys.stdin);print('hub:   ',d['digest'],d['last_updated'])"
+
+```
+
+LOG SEND RECIEVE
+
+```bash
+
+journalctl -u whatsapp-manager -f --no-pager | grep -E "RAW-PAYLOAD|Container event|ERR"
+```
+
+
+עכשיו האימות. מה שרץ בפועל:
+
+```bash
+# 1 · איזו גרסה באוויר
+curl -s localhost:5000/api/templates/health | python3 -m json.tool
+
+# 2 · שני ה-keys הגיעו לתהליך
+sudo tr '\0' '\n' < /proc/$(systemctl show -p MainPID --value whatsapp-manager)/environ | grep AppSettings__
+
+# 3 · הקוד החדש באמת רץ — זו השורה שקיימת רק בו
+journalctl -u whatsapp-manager --since "-10min" --no-pager | grep -E "sweep|redis_shared|Redis container|has no ```
 
 
 ```bash
@@ -462,3 +509,38 @@ docker exec redis_shared redis-cli config set maxmemory 384mb
 docker exec redis_shared redis-cli config set maxmemory-policy volatile-lru
 docker exec redis_shared redis-cli config get maxmemory-policy
 ```
+
+
+
+עכשיו cloudapi
+```bash
+curl -s -XPOST localhost:5000/api/phones/provision \
+  -H 'content-type: application/json' \
+  -d '{
+    "phoneNumber":      "972507251926",
+    "provider":         "cloudapi",
+    "wabaId":           "1119020710931381",
+    "phoneNumberId":    "<pnid>",
+    "cloudAccessToken": "<token>"
+  }' | python3 -m json.tool
+
+
+ו```
+```bash
+# 3. הקונטיינר
+docker rm -f whatsapp_972507251926_61ecde97
+
+```
+
+
+
+```bash
+
+# 4. deploy
+cd ~/projects/github/WhatsAppDockerManager
+sed -i 's|<Version>1.0.234</Version>|<Version>1.0.235</Version>|' src/WhatsAppDockerManager/WhatsAppDockerManager.csproj
+git add -A && git commit -m "provision: persist provider + cloud_system_user_id" && git push
+# ואחרי ה-CI
+cd /opt/myapp && ./update.sh
+
+ו```

@@ -19,6 +19,8 @@ public partial interface ISupabaseService
 
     Task SetPhoneCloudApiConfigAsync(Guid phoneId, string? wabaId, string? phoneNumberId,
                                      string? accessToken, string? verifyToken);
+
+    Task SetPhoneProviderAsync(Guid phoneId, string provider);
 }
 
 public partial class SupabaseService
@@ -96,6 +98,32 @@ public partial class SupabaseService
         {
             _logger.LogError(ex, "[DB] SetPhoneCloudApiConfigAsync failed for {PhoneId}", phoneId);
             throw;
+        }
+    }
+
+    /// <summary>
+    /// כותב את phones.provider. נקרא מ-Provision כשה-provider המבוקש שונה
+    /// מזה שבשורה.
+    ///
+    /// זה לא נראה חשוב עד שעושים restart: ContainerManager קורא את ה-provider
+    /// מה-DB, ולכן provider שלא נשמר פירושו שהטלפון יקום כספק הלא נכון בכל
+    /// פעם שה-Manager מסנכרן — גם אם ה-provision הראשון היה נכון.
+    /// </summary>
+    public async Task SetPhoneProviderAsync(Guid phoneId, string provider)
+    {
+        try
+        {
+            await _client.From<Phone>()
+                         .Where(x => x.Id == phoneId)
+                         .Set(x => x.Provider!, provider)
+                         .Update();
+
+            _logger.LogInformation("[DB] provider saved phone={PhoneId} provider={Provider}", phoneId, provider);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[DB] SetPhoneProviderAsync failed for {PhoneId}", phoneId);
+            throw;   // Provision צריך להיכשל ולא להקים קונטיינר מהספק הלא נכון
         }
     }
 
