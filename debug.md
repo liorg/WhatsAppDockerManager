@@ -444,3 +444,10 @@ journalctl -u whatsapp-manager --since "$START" -f | grep --line-buffered -E "TI
 ```bash
 sudo journalctl --rotate && sudo journalctl --vacuum-time=1s
 ```
+redis limit
+
+```bash
+docker exec redis_shared redis-cli config set maxmemory 384mb
+docker exec redis_shared redis-cli config set maxmemory-policy volatile-lru
+docker exec redis_shared redis-cli config get maxmemory-policy
+```

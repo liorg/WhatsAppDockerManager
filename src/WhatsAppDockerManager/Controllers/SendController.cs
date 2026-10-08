@@ -15,6 +15,9 @@ public class SendController : ControllerBase
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<SendController> _logger;
 
+    private const string ProviderBaileys  = "baileys";
+    private const string ProviderCloudApi = "cloudapi";
+
     public SendController(
         ISupabaseService   supabaseService,
         ISenderLogService  senderLogService,
@@ -27,7 +30,10 @@ public class SendController : ControllerBase
         _logger            = logger;
     }
 
-        // ── Send ping as template ────────────────────────────────────────────────
+    private static string ProviderOf(Phone phone) =>
+        string.IsNullOrWhiteSpace(phone.Provider) ? ProviderBaileys : phone.Provider.Trim().ToLowerInvariant();
+
+    // ── Send ping as template ────────────────────────────────────────────────
     // כמו SendPing, אבל ההודעה מחוללת מתבנית מאושרת במקום טקסט חופשי.
     // ה-ping_sender נוצר בדיוק כמו במסלול הרגיל — הוויזארד תלוי ב-pingSenderId.
     [HttpPost("ping-template")]
@@ -111,6 +117,7 @@ public class SendController : ControllerBase
         }
         catch { return null; }
     }
+
     // ── Send image ──────────────────────────────────────────────────────────────
     [HttpPost("image")]
     public async Task<IActionResult> SendImage(Guid phoneId, [FromBody] SendImageRequest request)
@@ -152,11 +159,7 @@ public class SendController : ControllerBase
         if (string.IsNullOrEmpty(phone.DockerUrl))
             return BadRequest(new { error = "Container not running", dockerStatus = phone.DockerStatus });
 
-        var provider = string.IsNullOrWhiteSpace(phone.Provider) ? "baileys" : phone.Provider;
-
-        // מסלול Cloud API עדיין לא קיים — נכשל מפורשות ולא בשקט.
-        if (provider != "baileys")
-            return StatusCode(501, new { error = "Template send is implemented for baileys only", provider });
+        var provider = string.IsNullOrWhiteSpace(phone.Provider) ? ProviderBaileys : phone.Provider;
 
         // ── שליפת התבנית ──────────────────────────────────────────────────────
         var lang = string.IsNullOrWhiteSpace(request.Lang) ? phone.Lang : request.Lang;
@@ -191,12 +194,16 @@ public class SendController : ControllerBase
 
         var headerFmt = content.Header?.Format ?? "none";
 
+        // HEADER של מדיה: ב-baileys אין לזה מקבילה בכלל, וב-Cloud API הוא דורש
+        // component מסוג header עם link/id — שלא נתמך כאן עדיין. נכשל מפורשות
+        // בשני המסלולים, ולא שולח תבנית חסרת כותרת בשקט.
         if (headerFmt is "image" or "video" or "document")
         {
             return BadRequest(new
             {
-                error  = "Media header is not supported on baileys template send",
+                error  = "Media header is not supported on template send",
                 format = headerFmt,
+                provider,
             });
         }
 
@@ -216,6 +223,8 @@ public class SendController : ControllerBase
         }
 
         // ── רינדור ────────────────────────────────────────────────────────────
+        // ב-baileys זה מה שנשלח. ב-cloudapi זה ה-echo בלבד — מטא מרנדרת אצלה,
+        // ואנחנו רוצים שחלון הצ'אט יראה את אותו טקסט ולא את שם התבנית.
         var lines = new List<string>();
         if (!string.IsNullOrWhiteSpace(headerText))
             lines.Add(FillParams(headerText, headerVals));
@@ -226,19 +235,51 @@ public class SendController : ControllerBase
         var bodyOnly = string.Join("\n", lines);
         var fullText = string.IsNullOrWhiteSpace(footer) ? bodyOnly : $"{bodyOnly}\n{footer}";
 
-        _logger.LogInformation(
-            "[TEMPLATE] {Name}/{Lang} -> {Jid} | params h={H} b={B} len={Len}",
-            template.Name, template.Lang, request.Jid,
-            headerVals.Count, bodyVals.Count, fullText.Length);
-
-        // ── שליחה לקונטיינר דרך ForwardToContainer ────────────────────────────
-        // כך מקבלים sender_log, חילוץ messageId וטיפול שגיאות בחינם.
-        // תבנית עם quick_reply → /send/buttons, אחרת הכפתורים נעלמים.
         var buttons = (content.Buttons ?? new List<TemplateButton>())
             .Where(x => !string.IsNullOrWhiteSpace(x.Text))
             .Select((x, i) => new ButtonItem { Id = $"btn_{i + 1}", Text = x.Text! })
             .ToList();
 
+        _logger.LogInformation(
+            "[TEMPLATE] {Provider} {Name}/{Lang} -> {Jid} | params h={H} b={B} len={Len} buttons={Btn}",
+            provider, template.Name, template.Lang, request.Jid,
+            headerVals.Count, bodyVals.Count, fullText.Length, buttons.Count);
+
+        // ══════════════════════════════════════════════════════════════════════
+        // Cloud API — מטא מרנדרת. שולחים שם + פרמטרים, ומצרפים את הטקסט לצורך
+        // ה-echo בלבד.
+        // ══════════════════════════════════════════════════════════════════════
+        // OrdinalIgnoreCase ולא ==: בשאר הקוד ההשוואה כך, ו-provider מגיע
+        // מעמודה בדאטהבייס. "CloudApi" היה נופל למסלול baileys בשקט, ושולח
+        // טקסט מרונדר למקום שמצפה לשם תבנית.
+        if (string.Equals(provider, ProviderCloudApi, StringComparison.OrdinalIgnoreCase))
+        {
+            // ה-params נשלחים כמו שהם: הקונטיינר ממיר אותם ל-components של
+            // Cloud API. ה-Manager לא בונה components בעצמו, כי זה היה קושר
+            // אותו לפורמט של מטא — וזה בדיוק מה שהארכיטקטורה הזו מונעת.
+            var tplReq = new
+            {
+                jid         = request.Jid,
+                name        = template.Name,      // הקונטיינר מנרמל לשם שמטא מכירה
+                language    = template.Lang,
+                @params     = pars,
+
+                // ה-echo: מה שחלון הצ'אט יציג. בלעדיו תוצג "[שם_התבנית]".
+                echoText    = fullText,
+                echoButtons = buttons.Count > 0
+                    ? buttons.Select(b => new { buttonId = b.Id, label = b.Text }).ToList<object>()
+                    : null,
+            };
+
+            return await ForwardToContainer(phoneId, "/send/template", tplReq, request.Jid,
+                "template",
+                new { template = template.Name, lang = template.Lang, text = fullText, footer, buttons, provider });
+        }
+
+        // ══════════════════════════════════════════════════════════════════════
+        // baileys — ה-Manager מרנדר ושולח טקסט או כפתורים.
+        // תבנית עם quick_reply → /send/buttons, אחרת הכפתורים נעלמים.
+        // ══════════════════════════════════════════════════════════════════════
         if (buttons.Count > 0)
         {
             var btnReq = new SendButtonsRequest
@@ -542,6 +583,24 @@ public class SendButtonResponseRequest { public string Jid { get; set; } = ""; p
 public class SendListResponseRequest   { public string Jid { get; set; } = ""; public string RowId { get; set; } = ""; public string? Title { get; set; } }
 public class SendPingRequest           { public string Jid { get; set; } = ""; public string? Text { get; set; } }
 
+/// <summary>מה ש-whatsapp-cloudapi מצפה לו ב-/send/template — מטא מרנדרת, לא אנחנו.</summary>
+public class CloudTemplateRequest
+{
+    public string Jid        { get; set; } = "";
+    public string Name       { get; set; } = "";
+    public string Language   { get; set; } = "";
+    public List<object> Components { get; set; } = new();
+
+    /// <summary>
+    /// הטקסט כפי שהתבנית נראית אחרי מילוי פרמטרים. משמש רק ל-echo של ההודעה
+    /// היוצאת ל-messages — מטא היא זו ששולחת את התוכן בפועל.
+    /// </summary>
+    public string? EchoText { get; set; }
+
+    /// <summary>כפתורי התבנית ל-echo, עם אותם btn_N שנשלחו כ-payload.</summary>
+    public List<ButtonItem>? EchoButtons { get; set; }
+}
+
 public class SendImageRequest
 {
     public string Jid { get; set; } = "";
@@ -578,6 +637,7 @@ public class SendTemplateRequest
     /// <summary>שליחת בדיקה: מדלגת על בדיקת is_published. status עדיין חייב להיות approved.</summary>
     public bool Test { get; set; }
 }
+
 public class SendPingTemplateRequest
 {
     public string Jid { get; set; } = "";
@@ -600,4 +660,3 @@ public class SendPingTemplateRequest
     /// <summary>מדלג על בדיקת is_published. status עדיין חייב להיות approved.</summary>
     public bool Test { get; set; }
 }
-

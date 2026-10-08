@@ -69,6 +69,11 @@ public class TemplatesController : ControllerBase
         var (code, raw) = await CallContainer(phone!.DockerUrl!, HttpMethod.Post, "/templates", body);
         if (code is < 200 or >= 300) return JsonRaw(code, raw);
 
+        // ה-name שחוזר יכול להיות **שונה** מזה שנשלח: cloudapi מנרמל ל-[a-z0-9_]
+        // כי מטא לא מקבלת אחרת, ושם בעברית מומר ל-hash דטרמיניסטי. אנחנו שומרים
+        // את השם **שלנו** ב-phone_templates ולא את זה של מטא, כי זה מה שהתרחישים
+        // מכירים — והקונטיינר מנרמל שוב בכל שליחה. ה-provider id הוא הקישור
+        // האמיתי בין השניים.
         using var doc  = JsonDocument.Parse(raw);
         var providerId = GetString(doc.RootElement, "id");
         var status     = MapStatus(GetString(doc.RootElement, "status"));
@@ -150,6 +155,25 @@ public class TemplatesController : ControllerBase
         return JsonRaw(code, raw);
     }
 
+    // ── remote — הקטלוג כפי שהספק מחזיק אותו ─────────────────────────────────
+    // `_remote_templates` ב-template_manager.py קורא לכאן. ב-cloudapi זה
+    // הקטלוג של ה-WABA מ-Graph, כולל תבניות שנוצרו ישירות ב-Business Manager
+    // ושעליהן לא מגיע שום webhook — ה-poller הוא הדרך היחידה לגלות אותן.
+    //
+    // ה-poller סופג כשל כאן בשקט, כי טלפון כבוי הוא מצב רגיל והוא ינסה טלפון
+    // אחר על אותו WABA. מה שלא נסלח הוא 200 עם גוף ריק: אז הוא יחשוב שהקטלוג
+    // באמת ריק ויסמן כל תבנית כ-deleted_at_provider. לכן כשל מוחזר כקוד שגיאה
+    // ולא כרשימה ריקה.
+    [HttpGet("remote")]
+    public async Task<IActionResult> RemoteTemplates(Guid phoneId, [FromQuery] int limit = 200)
+    {
+        var (phone, error) = await ResolvePhone(phoneId);
+        if (error != null) return error;
+
+        var (code, raw) = await CallContainer(phone!.DockerUrl!, HttpMethod.Get, $"/templates?limit={limit}");
+        return JsonRaw(code, raw);
+    }
+
     // ── helpers ───────────────────────────────────────────────────────────────
 
     private async Task<(Phone? phone, IActionResult? error)> ResolvePhone(Guid phoneId)
@@ -160,10 +184,9 @@ public class TemplatesController : ControllerBase
         if (string.IsNullOrEmpty(phone.DockerUrl))
             return (null, BadRequest(new { error = "Container not running", dockerStatus = phone.DockerStatus }));
 
-        var provider = string.IsNullOrWhiteSpace(phone.Provider) ? "baileys" : phone.Provider;
-        if (provider != "baileys")
-            return (null, StatusCode(501, new { error = "Template registration is implemented for baileys only", provider }));
-
+        // שני הספקים עוברים כאן. ההבדל כולו בתוך הקונטיינר: ב-baileys
+        // ה-/templates הוא טבלה מקומית, וב-cloudapi הוא קטלוג ה-WABA ב-Graph.
+        // ה-Manager לא צריך לדעת — הוא מעביר את אותו גוף לאותו path.
         return (phone, null);
     }
 

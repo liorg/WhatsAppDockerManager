@@ -8,16 +8,23 @@ using Supabase;
 
 public sealed class StartPrepareResult
 {
-    [JsonPropertyName("host_id")]        public Guid             HostId       { get; set; }
-    [JsonPropertyName("revision")]       public int              Revision     { get; set; }
-    [JsonPropertyName("provider")]       public string           Provider     { get; set; } = "baileys";
-    [JsonPropertyName("image")]          public string           Image        { get; set; } = "";
-    [JsonPropertyName("masked_user")]    public string           MaskedUser   { get; set; } = "****anon";
-    [JsonPropertyName("used_api_ports")] public List<int>        UsedApiPorts { get; set; } = new();
-    [JsonPropertyName("used_ws_ports")]  public List<int>        UsedWsPorts  { get; set; } = new();
+    [JsonPropertyName("host_id")]        public Guid      HostId       { get; set; }
+    [JsonPropertyName("revision")]       public int       Revision     { get; set; }
+    [JsonPropertyName("provider")]       public string    Provider     { get; set; } = "baileys";
+    [JsonPropertyName("image")]          public string    Image        { get; set; } = "";
+    [JsonPropertyName("masked_user")]    public string    MaskedUser   { get; set; } = "****anon";
+    [JsonPropertyName("used_api_ports")] public List<int> UsedApiPorts { get; set; } = new();
+    [JsonPropertyName("used_ws_ports")]  public List<int> UsedWsPorts  { get; set; } = new();
+ 
+    // ── cloudapi. null כשה-RPC עדיין לא מחזיר אותם, או כשהטלפון baileys ──
+    [JsonPropertyName("waba_id")]            public string? WabaId           { get; set; }
+    [JsonPropertyName("phone_number_id")]    public string? PhoneNumberId    { get; set; }
+    [JsonPropertyName("cloud_access_token")] public string? CloudAccessToken { get; set; }
+    [JsonPropertyName("cloud_verify_token")] public string? CloudVerifyToken { get; set; }
 }
 
-public interface ISupabaseService
+
+public  partial interface ISupabaseService
 {
     // ── Start RPC (קריאה אחת לפני docker, קריאה אחת אחרי) ──────────
     Task<StartPrepareResult> PrepareStartAsync(Guid phoneId, Guid hostId, string startingStatus);
@@ -137,9 +144,12 @@ public interface ISupabaseService
     Task DeletePhoneTemplateAsync(Guid templateId);
     Task<List<PhoneTemplate>> GetPendingTemplatesAsync();
     Task<List<PhoneTemplate>> GetPhoneTemplatesAsync(Guid phoneId);
+  
+
+
 }
 
-public class SupabaseService : ISupabaseService
+public partial class SupabaseService : ISupabaseService
 {
     private readonly Client _client;
     private readonly ILogger<SupabaseService> _logger;

@@ -79,6 +79,7 @@ public int AuthRevision { get; set; } = 0;
     [Column("creds_updated_at")]    public DateTime? CredsUpdatedAt    { get; set; }
 
 
+
     // ════════════════════════════════════════════════════════════════════════════
 // Models/Phone.cs — שתי עמודות חדשות
 // ════════════════════════════════════════════════════════════════════════════
@@ -100,6 +101,27 @@ public int AuthRevision { get; set; } = 0;
     /// </summary>
     [Column("heartbeat_phone_id")]
     public Guid? HeartbeatPhoneId { get; set; }
+
+
+        /// <summary>Cloud API — מזהה ה-WhatsApp Business Account.</summary>
+    [Column("waba_id")]
+    public string? WabaId { get; set; }
+ 
+    /// <summary>Cloud API — מזהה המספר אצל מטא. לא מספר הטלפון.</summary>
+    [Column("phone_number_id")]
+    public string? PhoneNumberId { get; set; }
+ 
+    /// <summary>
+    /// טוקן משתמש מערכת קבוע. ריק → נופל ל-AppSettings:Meta:AccessToken.
+    /// לא נחשף ב-PHONE_COLUMNS של ה-UI backend.
+    /// </summary>
+    [Column("cloud_access_token")]
+    public string? CloudAccessToken { get; set; }
+ 
+    /// <summary>hub.verify_token פר טלפון, ל-handshake מול whqueue.</summary>
+    [Column("cloud_verify_token")]
+    public string? CloudVerifyToken { get; set; }
+
 }
 
 public static class PhoneDockerStatus
