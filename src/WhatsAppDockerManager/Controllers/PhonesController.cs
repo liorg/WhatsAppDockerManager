@@ -121,6 +121,12 @@ public class PhonesController : ControllerBase
         if (!isValid)
             return BadRequest(new { error = validationError });
 
+        // userId חובה. טלפון בלי בעלים מגיע ל-masked_user='****anon' ב-
+        // start_phone_prepare, לא משויך לאף לקוח ב-UI, ובמסלול cloudapi הוא
+        // גם לא קושר בין פרטי מטא לבין מי שהביא אותם. נכשלים כאן ולא אחר כך.
+        if (!request.UserId.HasValue || request.UserId.Value == Guid.Empty)
+            return BadRequest(new { error = "userId is required" });
+
         // ה-provider המבוקש נחשב **לפני** ה-create, כי הוא חייב להיכתב בשורה
         // עצמה. בלעדיו השורה נוצרת עם ברירת המחדל של העמודה — baileys — ואז
         // קם קונטיינר baileys לטלפון cloudapi: הוא עולה, נראה בריא, ואין לו
@@ -159,6 +165,17 @@ public class PhonesController : ControllerBase
                         Label = request.Nickname, Color = request.Tag,
                         Status = "active", DockerStatus = PhoneDockerStatus.Pending,
                         Provider = reqProvider ?? ProviderBaileys,
+
+                        // UserId גם במסלול הזה. הוא null כאן רק כשהבקשה לא
+                        // כללה אותו, ואז הטלפון נשאר בלי בעלים — מה שמשפיע
+                        // על masked_user ב-prepare ועל שיוך ב-UI.
+                        UserId = request.UserId,
+
+                        // בלי זה created_at מקבל DateTime.MinValue ונשמר
+                        // כ-0001-01-01. GetOrCreatePhoneAsync (המסלול עם
+                        // userId) כן מציב אותו, ולכן זה נראה כבאג שמופיע
+                        // רק בחצי מהמקרים.
+                        CreatedAt = DateTime.UtcNow,
                     });
                     isNew = true;
                     _logger.LogInformation("[PROVISION] DB | created new phoneId={PhoneId}", phone.Id);

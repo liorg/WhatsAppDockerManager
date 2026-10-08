@@ -517,19 +517,22 @@ docker exec redis_shared redis-cli config get maxmemory-policy
 curl -s -XPOST localhost:5000/api/phones/provision \
   -H 'content-type: application/json' \
   -d '{
+    "userId":           "bcc282f3-bfa3-4afa-b506-79109a128ba8",
     "phoneNumber":      "972507251926",
     "provider":         "cloudapi",
     "wabaId":           "1119020710931381",
-    "phoneNumberId":    "<pnid>",
-    "cloudAccessToken": "<token>"
+    "phoneNumberId":    "1247327145139602",
+    "cloudAccessToken": "<טוקן חדש>"
   }' | python3 -m json.tool
 
+  
+  ו```
 
-ו```
+
 ```bash
 # 3. הקונטיינר
+docker stop -f whatsapp_972507251926_61ecde97
 docker rm -f whatsapp_972507251926_61ecde97
-
 ```
 
 
@@ -540,7 +543,55 @@ docker rm -f whatsapp_972507251926_61ecde97
 cd ~/projects/github/WhatsAppDockerManager
 sed -i 's|<Version>1.0.234</Version>|<Version>1.0.235</Version>|' src/WhatsAppDockerManager/WhatsAppDockerManager.csproj
 git add -A && git commit -m "provision: persist provider + cloud_system_user_id" && git push
+
+ו```
+
+```bash
 # ואחרי ה-CI
 cd /opt/myapp && ./update.sh
 
 ו```
+
+
+```bash
+
+curl -s -XPOST localhost:5000/api/phones/abf49a4a-be90-403f-a02f-f78050e75864/send/text \
+  -H 'content-type: application/json' \
+  -d '{"jid":"972546252491@s.whatsapp.net","text":"שלום מ-cloudapi"}' | python3 -m json.tool
+  ו```
+
+
+
+
+
+1 · להחזיר את ה-webhook במטא
+
+ה-override הוגדר כ-POST /{phone_number_id} עם webhook_configuration. להסרה — מחרוזת ריקה:
+
+```bash
+TOKEN='<cloud_access_token>'
+PNID=1247327145139602
+
+curl -s -XPOST "https://graph.facebook.com/v21.0/$PNID" \
+  -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"webhook_configuration":{"override_callback_uri":""}}' | python3 -m json.tool
+  ו```
+
+ואז קריאה חזרה — זה מה שקובע, לא ה-200:
+
+```bash
+curl -s "https://graph.facebook.com/v21.0/$PNID?fields=webhook_configuration" \
+  -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
+  ו```
+
+צריך להישאר רק "application": "https://webhook.grossman.bot/webhook", בלי phone_number. אם ה-phone_number עוד שם, נסה את הצורה הישנה:
+
+```bash
+curl -s -XPOST "https://graph.facebook.com/v21.0/$PNID/settings" \
+  -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"webhooks":{"override_callback_uri":""}}' | python3 -m json.tool
+  ו```
+
+וקריאה חזרה שוב. אל תמשיך לשלב 2 לפני ש-phone_number נעלם — אחרת מטא תמשיך לשלוח ל-whqueue, ההודעות ייכנסו ל-NATS ויצטברו בתור בלי צרכן.
+
+את ה-subscribed_apps ברמת ה-WABA אל תיגע — הוא מה שמאפשר ל-message_template_status_update להמשיך להגיע ל-webhook של האפליקציה.
