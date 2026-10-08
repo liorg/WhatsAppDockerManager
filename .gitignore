@@ -7,3 +7,5 @@ publish/
 bin/
 bin/debug/*
 bin/release/
+obj/
+bin/
