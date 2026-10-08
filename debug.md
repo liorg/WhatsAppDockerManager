@@ -6,9 +6,10 @@ Troubleshooting
 
 ```bash
 docker pull liorgr/whatsapp-single:latest
-```
 
-```bash
+docker rm -f whatsapp_972504476645_3beff8fa
+sudo systemctl restart whatsapp-manager
+docker exec whatsapp_972504476645_3beff8fa printenv REDIS_URL
 cd /opt/myapp
  sudo ./update.sh
 ```
@@ -19,8 +20,9 @@ docker ps -a --format "table {{.Names}}\t{{.Status}}\t{{.Image}}"
 ```bash
 docker stop  whatsapp_972504476645_3beff8fa
 docker rm whatsapp_972504476645_3beff8fa
-```
 
+sudo systemctl restart whatsapp-manager
+docker exec whatsapp_972504476645_3beff8fa printenv REDIS_URL
 
 ```bash
 sudo systemctl restart whatsapp-manager.service
@@ -32,15 +34,24 @@ clear
 ```
 
 
+
+```bash
+systemctl status whatsapp-manager --no-pager | head -20
+journalctl -u whatsapp-manager -n 60 --no-pager | tail -40
+
+```
+
+
 direction=true = from contact to phone
 ```bash
 select * from messages order by sent_at desc limit 5
 ```
 
+```bash
+curl -s "https://hub.docker.com/v2/repositories/liorgr/whatsapp-cloudapi/tags/?page_size=25" \
+  | python3 -c "import json,sys;[print(t['name']) for t in json.load(sys.stdin)['results']]"
 
-
-
-
+```
 
 
 # בדוק logs
