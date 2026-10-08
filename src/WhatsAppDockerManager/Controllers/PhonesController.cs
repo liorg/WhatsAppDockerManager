@@ -137,12 +137,50 @@ public class PhonesController : ControllerBase
         _logger.LogInformation("[PROVISION] ▶ Start | phone={Phone} user={UserId} provider={Provider}",
             normalizedPhone, request.UserId, request.Provider ?? "(from db)");
 
+        // ── 0. בעלות ─────────────────────────────────────────────────
+        // טלפון לא עובר בין לקוחות. אף פעם.
+        //
+        // זה היה אפשרי עד כאן בשתי דרכים: GetOrCreatePhoneAsync זורק על
+        // אי-התאמה, אבל שלב "Update userId if missing" למטה **כן** דרס את
+        // user_id כשהוא היה שונה — כלומר provision עם userId אחר העביר את
+        // הטלפון, עם כל ההודעות ואנשי הקשר שלו, ללקוח אחר.
+        //
+        // שיוך טלפון **חסר-בעלים** אינו העברה, והוא מותר: זה המצב של שורות
+        // שנוצרו לפני שה-userId היה חובה.
+        var owned = await _supabaseService.GetPhoneByNumberAsync(normalizedPhone!);
+        if (owned != null
+            && owned.UserId.HasValue && owned.UserId.Value != Guid.Empty
+            && owned.UserId.Value != request.UserId!.Value)
+        {
+            _logger.LogWarning(
+                "[PROVISION] ✗ refused | phone={Phone} belongsTo={Owner} requestedBy={Requester}",
+                normalizedPhone, owned.UserId, request.UserId);
+
+            return Conflict(new
+            {
+                error = "Phone number belongs to another customer",
+                phoneNumber = normalizedPhone,
+                hint = "A phone is never transferred between customers. "
+                     + "Delete the phone from its current owner first if this is intentional.",
+            });
+        }
+
         // ── 1. Get or Create phone record ──────────────────────────
         Phone phone;
         bool  isNew;
         try
         {
-            if (request.UserId.HasValue)
+            // GetOrCreatePhoneAsync זורק גם כש-user_id הוא null, כי
+            // `null != userId` אמיתי — ולכן טלפון חסר-בעלים לא היה ניתן
+            // לשיוך. כאן הוא מטופל ישירות, בלי לעבור דרכו.
+            if (owned != null && (!owned.UserId.HasValue || owned.UserId.Value == Guid.Empty))
+            {
+                phone  = owned;
+                isNew  = false;
+                _logger.LogInformation("[PROVISION] DB | claiming ownerless phoneId={PhoneId} → user={UserId}",
+                    phone.Id, request.UserId);
+            }
+            else if (request.UserId.HasValue)
             {
                 (phone, isNew) = await _supabaseService.GetOrCreatePhoneAsync(
                     normalizedPhone!, request.UserId.Value, request.Nickname);
@@ -209,11 +247,13 @@ public class PhonesController : ControllerBase
         _logger.LogInformation("[PROVISION] Ports | phoneId={PhoneId} fastApi={FastApi} baileys={Baileys}",
             phone.Id, fastApiPort, baileysPort);
 
-        // ── 3. Update userId if missing ─────────────────────────────
-        if (request.UserId.HasValue &&
-            (phone.UserId == Guid.Empty || phone.UserId == null || phone.UserId != request.UserId))
+        // ── 3. Fill userId only when missing ────────────────────────
+        // **רק** כשהוא ריק. התנאי הקודם כלל `phone.UserId != request.UserId`,
+        // כלומר כל אי-התאמה דרסה את הבעלים — העברה בין לקוחות בשקט. אי-התאמה
+        // כבר נדחתה בשלב 0 ולא יכולה להגיע לכאן.
+        if (request.UserId.HasValue && (phone.UserId == null || phone.UserId == Guid.Empty))
         {
-            _logger.LogInformation("[PROVISION] UserId | updating phoneId={PhoneId} userId={UserId}",
+            _logger.LogInformation("[PROVISION] UserId | filling empty owner phoneId={PhoneId} userId={UserId}",
                 phone.Id, request.UserId);
             await _supabaseService.UpdatePhoneUserIdAsync(phone.Id, request.UserId.Value);
             phone.UserId = request.UserId.Value;
