@@ -1,6 +1,7 @@
 ```bash
 http://localhost:5000/swagger/index.html
-
+```
+```bash
 cd /opt/myapp
 chmod +x update.sh
 sudo ./update.sh
