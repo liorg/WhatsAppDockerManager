@@ -52,6 +52,9 @@
                 /// <summary>Set when this contact is a heartbeat prober, not a real customer.</summary>
         [Column("heartbeat_phone_id")]
         public Guid? HeartbeatPhoneId { get; set; }
- 
+
+[Column("parent_contact_id", ignoreOnInsert: true, ignoreOnUpdate: true)]
+public Guid? ParentContactId { get; set; }
+        
 
     }
