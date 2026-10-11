@@ -281,6 +281,17 @@ private async Task HandleAuthenticated(Guid phoneId, Phone phone, ContainerEvent
                 contactLid = IsValidLid(rawLidLocal) ? rawLidLocal : null;
             }
 
+            // ── send_to = המספר האמיתי ─────────────────────────────
+            // כשה-JID הוא LID, contactNumber יוצא LID, וכל LID חדש של אותו אדם
+            // יצר draft חדש. send_to מחזיק את המספר — הוא המפתח של איש הקשר.
+            var sendToNumber = SendToNumber(payload.SendTo, contactLid);
+            if (sendToNumber != null && sendToNumber != contactNumber)
+            {
+                if (string.IsNullOrEmpty(contactLid) && IsValidLid(contactNumber))
+                    contactLid = contactNumber;
+                contactNumber = sendToNumber;
+            }
+
             // ══════════════════════════════════════════════════════
             // הודעה יוצאת (fromMe=true)
             // ══════════════════════════════════════════════════════
@@ -293,8 +304,12 @@ private async Task HandleAuthenticated(Guid phoneId, Phone phone, ContainerEvent
                  // LID מגיע לפעמים עם דומיין s.whatsapp.net ולא @lid, ואז
                 // contactNumber מכיל LID. חיפוש לפי number קודם תופס drafts
                 // ישנים שה-number שלהם הוא בעצם LID — ומנציח את הכפילות.
-                var outContact = await _supabaseService.GetContactByLidAsync(phoneId, contactNumber)
-                              ?? await _supabaseService.GetContactByNumberAsync(phoneId, contactNumber);
+                // יש send_to → number זהה ל-send_to, ואם אין — draft חדש עם המספר הזה.
+                // אין send_to (container ישן) → החיפוש הקודם לפי LID ואז number.
+                var outContact = sendToNumber != null
+                    ? await ResolveBySendToAsync(phoneId, sendToNumber)
+                    : await _supabaseService.GetContactByLidAsync(phoneId, contactNumber)
+                      ?? await _supabaseService.GetContactByNumberAsync(phoneId, contactNumber);
 
 
                    
@@ -315,11 +330,21 @@ private async Task HandleAuthenticated(Guid phoneId, Phone phone, ContainerEvent
             // ══════════════════════════════════════════════════════
 
             
-            Contact? existing = null;
-            if (!string.IsNullOrEmpty(contactLid))
-                existing = await _supabaseService.GetContactByLidAsync(phoneId, contactLid);
-            if (existing == null)
-                existing = await _supabaseService.GetContactByNumberAsync(phoneId, contactNumber);
+            // יש send_to → 1. number זהה ל-send_to  2. אין — draft חדש עם המספר הזה (למטה).
+            // אין send_to (container ישן) → החיפוש הקודם לפי LID ואז number.
+            Contact? existing;
+            if (sendToNumber != null)
+            {
+                existing = await ResolveBySendToAsync(phoneId, sendToNumber);
+            }
+            else
+            {
+                existing = null;
+                if (!string.IsNullOrEmpty(contactLid))
+                    existing = await _supabaseService.GetContactByLidAsync(phoneId, contactLid);
+                if (existing == null)
+                    existing = await _supabaseService.GetContactByNumberAsync(phoneId, contactNumber);
+            }
 
             // Prober announcement: promote whatever we just found, or create.
             string? incomingText = null;
@@ -350,7 +375,11 @@ private async Task HandleAuthenticated(Guid phoneId, Phone phone, ContainerEvent
                 }
 
                 if (IsValidLid(contactLid) && !IsValidLid(contact.Lid))
-                { contact.Lid = contactLid; needsUpdate = true; }
+                {
+                    var lidOwner = await _supabaseService.GetContactByLidAsync(phoneId, contactLid!);
+                    if (lidOwner == null || lidOwner.Id == contact.Id)
+                    { contact.Lid = contactLid; needsUpdate = true; }
+                }
 
                 if (userId.HasValue && contact.UserId == null)
                 { contact.UserId = userId; needsUpdate = true; }
@@ -426,6 +455,34 @@ private async Task HandleAuthenticated(Guid phoneId, Phone phone, ContainerEvent
             await _supabaseService.UpdatePhoneHeartbeatIdAsync(phoneId, prober.Id);
 
         return contact;
+    }
+
+    // ── send_to → contact ────────────────────────────────────────────────────
+    // send_to = "<number>@s.whatsapp.net" — the real phone number (baileys rc7).
+    // The tag is the user's decision; nothing here reads or sets it.
+    private static string? SendToNumber(string? sendTo, string? lid)
+    {
+        if (string.IsNullOrWhiteSpace(sendTo)) return null;
+        var parts = sendTo.Split('@');
+        if (parts.Length > 1 && !parts[1].Equals("s.whatsapp.net", StringComparison.OrdinalIgnoreCase))
+            return null;
+        var digits = new string(parts[0].Where(char.IsDigit).ToArray());
+        if (digits.Length < 7 || digits.Length > 15) return null;
+        if (!string.IsNullOrEmpty(lid) && digits == lid) return null;   // LID disguised as a number
+        return digits;
+    }
+
+    // Contact whose number equals send_to; a connected draft (is_connect + parent) resolves to its parent.
+    private async Task<Contact?> ResolveBySendToAsync(Guid phoneId, string number)
+    {
+        var c = await _supabaseService.GetContactByNumberAsync(phoneId, number);
+        if (c == null) return null;
+
+        if (c.IsConnect == true && c.ParentContactId.HasValue)
+            c = await _supabaseService.GetContactByIdAsync(c.ParentContactId.Value) ?? c;
+
+        _logger.LogInformation("[MSG] send_to {Number} → contact {Id} tag={Tag}", number, c.Id, c.Tag);
+        return c;
     }
 
 private async Task SaveMessage(
