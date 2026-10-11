@@ -472,12 +472,16 @@ private async Task HandleAuthenticated(Guid phoneId, Phone phone, ContainerEvent
         return digits;
     }
 
-    // Contact whose number equals send_to. A connected draft is returned as-is:
-    // GET /contacts/{id}/conversation already includes drafts with parent_contact_id + is_connect.
+    // Contact whose number equals send_to; a connected draft (is_connect + parent) resolves to its parent.
+    // GetContactByNumberAsync returns an arbitrary match when several share the number
+    // (e.g. after a merged connect), so the parent hop is what lands the message on the active one.
     private async Task<Contact?> ResolveBySendToAsync(Guid phoneId, string number)
     {
         var c = await _supabaseService.GetContactByNumberAsync(phoneId, number);
         if (c == null) return null;
+
+        if (c.IsConnect == true && c.ParentContactId.HasValue)
+            c = await _supabaseService.GetContactByIdAsync(c.ParentContactId.Value) ?? c;
 
         _logger.LogInformation("[MSG] send_to {Number} → contact {Id} tag={Tag}", number, c.Id, c.Tag);
         return c;
