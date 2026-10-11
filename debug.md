@@ -1,6 +1,12 @@
 ```bash
 http://localhost:5000/swagger/index.html
+
+cd /opt/myapp
+chmod +x update.sh
+sudo ./update.sh
+
 ```
+
 Troubleshooting
 הcontainer לא עולה
 
