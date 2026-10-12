@@ -17,9 +17,9 @@ namespace WhatsAppDockerManager.Services;
 /// create a draft contact or start a scenario, and the ACK's fromMe echo
 /// must not either.
 ///
-/// .env:
-///   AppSettings__Canary__ProberNumbers=972501234567     comma-separated
-///   AppSettings__Canary__AutoReply=true                 kill switch
+/// .env — אחד משני השמות, מה שתואם לשאר ה-.env:
+///   AppSettings__Canary__ProberNumbers=972501234567   (או CANARY_PROBER_NUMBERS=…)  comma-separated
+///   AppSettings__Canary__AutoReply=false              (או CANARY_AUTO_REPLY=false)  kill switch
 /// </summary>
 public static partial class CanaryAutoReply
 {
@@ -55,7 +55,8 @@ public static partial class CanaryAutoReply
             return AckRegex().IsMatch(text ?? "") ? Kind.AckEcho : Kind.OtherFromProber;
         }
 
-        if (string.Equals(cfg["AppSettings:Canary:AutoReply"], "false", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(Get(cfg, "AppSettings:Canary:AutoReply", "CANARY_AUTO_REPLY"), "false",
+                          StringComparison.OrdinalIgnoreCase))
             return Kind.OtherFromProber;
 
         var m = CheckRegex().Match(blob);
@@ -68,9 +69,21 @@ public static partial class CanaryAutoReply
     public static bool IsProber(IConfiguration cfg, string? number)
     {
         if (string.IsNullOrWhiteSpace(number)) return false;
-        return (cfg["AppSettings:Canary:ProberNumbers"] ?? "")
+        return (Get(cfg, "AppSettings:Canary:ProberNumbers", "CANARY_PROBER_NUMBERS") ?? "")
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Any(p => SameNumber(p, number));
+    }
+
+    /// <summary>
+    /// AppSettings__Canary__X מגיע דרך IConfiguration; שם שטוח (CANARY_X) נקרא
+    /// ישירות מה-env, למקרה שה-.env נטען בלי מיפוי ל-AppSettings.
+    /// </summary>
+    private static string? Get(IConfiguration cfg, string key, string flatEnv)
+    {
+        var v = cfg[key];
+        if (!string.IsNullOrWhiteSpace(v)) return v;
+        v = cfg[flatEnv];
+        return !string.IsNullOrWhiteSpace(v) ? v : Environment.GetEnvironmentVariable(flatEnv);
     }
 
     /// <summary>Last 9 digits - survives +, leading 0 and @s.whatsapp.net. Never matches a @lid.</summary>
