@@ -1,3 +1,4 @@
+using System.Net.Http.Json;
 using Microsoft.AspNetCore.Mvc;
 using System.Collections.Concurrent;
 using System.Text.Json.Serialization;
@@ -292,6 +293,27 @@ private async Task HandleAuthenticated(Guid phoneId, Phone phone, ContainerEvent
                 contactNumber = sendToNumber;
             }
 
+            // ── canary v2 ─────────────────────────────────────────
+            // CHECK מה-prober → ACK, ואפס כתיבה ל-messages/contacts. גם ה-echo
+            // של ה-ACK (fromMe) נבלע כאן, אחרת היה נוצר draft למספר ה-prober.
+            var canaryKind = CanaryAutoReply.Classify(
+                HttpContext.RequestServices.GetRequiredService<IConfiguration>(),
+                sendToNumber ?? contactNumber, isIncoming, payload.Data, out var canaryAck);
+
+            if (canaryKind != CanaryAutoReply.Kind.None)
+            {
+                if (canaryKind == CanaryAutoReply.Kind.Check)
+                {
+                    var replyJid = sendToNumber != null ? $"{sendToNumber}@s.whatsapp.net" : payload.Jid;
+                    await SendCanaryAckAsync(phone, replyJid, canaryAck);
+                }
+                else
+                {
+                    _logger.LogInformation("[CANARY] {Kind} on phone {PhoneId} - not saved", canaryKind, phoneId);
+                }
+                return;
+            }
+
             // ══════════════════════════════════════════════════════
             // הודעה יוצאת (fromMe=true)
             // ══════════════════════════════════════════════════════
@@ -346,20 +368,6 @@ private async Task HandleAuthenticated(Guid phoneId, Phone phone, ContainerEvent
                     existing = await _supabaseService.GetContactByNumberAsync(phoneId, contactNumber);
             }
 
-            // Prober announcement: promote whatever we just found, or create.
-            string? incomingText = null;
-            if (payload.Data?.TryGetValue("text", out var txtVal) == true)
-                incomingText = txtVal?.ToString();
-
-            var hbContact = await TryHandleHeartbeatAsync(
-                phoneId, phone, contactNumber, contactLid, incomingText, existing);
-            
-            if (hbContact != null)
-            {
-                await SaveMessage(phoneId, phone, hbContact, contactNumber, contactLid, isIncoming, payload);
-                return;
-            }
-            
             Contact contact;
             if (existing != null)
             {
@@ -405,56 +413,32 @@ private async Task HandleAuthenticated(Guid phoneId, Phone phone, ContainerEvent
         }
     }
   
-    private async Task<Contact?> TryHandleHeartbeatAsync(
-        Guid phoneId, Phone phone,
-        string contactNumber, string? contactLid,
-        string? messageText, Contact? existing)
+    /// <summary>
+    /// ACK מהטלפון הנבדק עצמו, דרך הקונטיינר שלו — אותו מסלול כמו SendPing.
+    /// לא נרשם ל-sender_log: זו תעבורת בדיקה, לא הודעה של הלקוח.
+    /// </summary>
+    private async Task SendCanaryAckAsync(Phone phone, string jid, string text)
     {
-        if (string.IsNullOrWhiteSpace(messageText)) return null;
-
-        var prober = await _supabaseService
-            .GetHeartbeatPhoneByIdentificationAsync(messageText.Trim());
-        if (prober == null) return null;
-
-        _logger.LogWarning("[HB] Identification match on phone {PhoneId} -> prober {ProberId} uid={Uid}",
-            phoneId, prober.Id, prober.Uid);
-
-        Contact contact;
-
-        if (existing != null)
+        if (string.IsNullOrEmpty(phone.DockerUrl))
         {
-            existing.HeartbeatPhoneId = prober.Id;
-            existing.Tag              = "active";
-            existing.IsBot            = true;
-            if (!string.IsNullOrEmpty(contactLid))         existing.Lid    = contactLid;
-            if (!string.IsNullOrEmpty(prober.PhoneNumber)) existing.Number = prober.PhoneNumber;
-            if (phone.UserId.HasValue && existing.UserId == null) existing.UserId = phone.UserId;
-
-            contact = await _supabaseService.UpdateContactAsync(existing);
-            _logger.LogWarning("[HB] Promoted contact {ContactId} on phone {PhoneId}", contact.Id, phoneId);
+            _logger.LogWarning("[CANARY] CHECK on {PhoneId} but no DockerUrl - cannot ACK", phone.Id);
+            return;
         }
-        else
+        try
         {
-            contact = await _supabaseService.CreateContactAsync(new Contact
-            {
-                PhoneId          = phoneId,
-                Lid              = contactLid,
-                Number           = prober.PhoneNumber,
-                Name             = "Heartbeat",
-                WhatsappName     = "Heartbeat",
-                Tag              = "active",      // active, not draft - skips the wizard
-                IsBot            = true,
-                UserId           = phone.UserId,
-                HeartbeatPhoneId = prober.Id
-            });
-            _logger.LogWarning("[HB] Created contact {ContactId} on phone {PhoneId}", contact.Id, phoneId);
+            var client = HttpContext.RequestServices.GetRequiredService<IHttpClientFactory>().CreateClient();
+            client.Timeout = TimeSpan.FromSeconds(15);
+            using var res = await client.PostAsJsonAsync($"{phone.DockerUrl}/send/text", new { jid, text });
+            if (res.IsSuccessStatusCode)
+                _logger.LogInformation("[CANARY] {Ack} sent from {PhoneId} to {Jid}", text, phone.Id, jid);
+            else
+                _logger.LogWarning("[CANARY] ACK from {PhoneId} failed {Status}: {Body}",
+                    phone.Id, (int)res.StatusCode, await res.Content.ReadAsStringAsync());
         }
-
-        // Second table: the phone now knows which prober watches it.
-        if (phone.HeartbeatPhoneId != prober.Id)
-            await _supabaseService.UpdatePhoneHeartbeatIdAsync(phoneId, prober.Id);
-
-        return contact;
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[CANARY] ACK from {PhoneId} threw", phone.Id);
+        }
     }
 
     // ── send_to → contact ────────────────────────────────────────────────────
