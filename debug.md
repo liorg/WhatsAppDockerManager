@@ -597,8 +597,44 @@ curl -s "https://graph.facebook.com/v21.0/$PNID?fields=webhook_configuration" \
 curl -s -XPOST "https://graph.facebook.com/v21.0/$PNID/settings" \
   -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
   -d '{"webhooks":{"override_callback_uri":""}}' | python3 -m json.tool
+```
+
+
+```bash
+curl -s -XPOST http://localhost:5000/api/phones/$ID/logout -w '\nHTTP %{http_code}\n' | python3 -c "
+import sys
+raw = sys.stdin.read()
+body, _, code = raw.rpartition('HTTP ')
+import json
+try: print(json.dumps(json.loads(body.strip()), indent=2, ensure_ascii=False))
+except Exception: print(body)
+print('HTTP', code.strip())"
+
+```
   ו```
 
 וקריאה חזרה שוב. אל תמשיך לשלב 2 לפני ש-phone_number נעלם — אחרת מטא תמשיך לשלוח ל-whqueue, ההודעות ייכנסו ל-NATS ויצטברו בתור בלי צרכן.
 
-את ה-subscribed_apps ברמת ה-WABA אל תיגע — הוא מה שמאפשר ל-message_template_status_update להמשיך להגיע ל-webhook של האפליקציה.
+את ה-subscribed_apps ברמת ה-WABA אל תיגע — הוא מה שמאפשר ל-messa
+
+
+
+
+Manager חי, 1.0.239.0, ו-/api/phones מחזיר 200. ה-resume הריק היה בזמן ה-restart של update.sh.
+
+```bash
+C=whatsapp_972507251926_e4ab3a7f
+ID=e4ab3a7f-08bb-4e12-aea9-fd34279beb99
+
+curl -s -XPOST http://localhost:5000/api/phones/$ID/resume -w '\nHTTP %{http_code}\n'
+sleep 12
+docker exec $C python -c "
+import urllib.request, json
+d = json.load(urllib.request.urlopen('http://127.0.0.1:8000/health'))
+print(d['version'], d['inbound_sha'], d['nats_connected'], d['override_set'], d['webhooks_count'])
+o = json.load(urllib.request.urlopen('http://127.0.0.1:8000/openapi.json'))
+"
+```
+
+
+מחפש 1.1.6 8a1038e17067 True True 1 ו-['/logout'].ge_template_status_update להמשיך להגיע ל-webhook של האפליקציה.
