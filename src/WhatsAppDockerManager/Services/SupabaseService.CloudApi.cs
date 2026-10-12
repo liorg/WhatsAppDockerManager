@@ -6,6 +6,9 @@
 //
 // ה-RPC phone_cloudapi_config חייב להיות בדאטהבייס. ה-SQL בקובץ
 // sql/phone_cloudapi_config.sql
+//
+// sql/phone_cloudapi_clear.sql אינו נדרש — הניקוי הוא Update רגיל שמציב
+// מחרוזת ריקה. אפשר למחוק את הקובץ.
 
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -21,6 +24,8 @@ public partial interface ISupabaseService
                                      string? accessToken, string? verifyToken);
 
     Task SetPhoneProviderAsync(Guid phoneId, string provider);
+
+    Task ClearPhoneCloudApiConfigAsync(Guid phoneId, bool wipeAll = false);
 }
 
 public partial class SupabaseService
@@ -124,6 +129,57 @@ public partial class SupabaseService
         {
             _logger.LogError(ex, "[DB] SetPhoneProviderAsync failed for {PhoneId}", phoneId);
             throw;   // Provision צריך להיכשל ולא להקים קונטיינר מהספק הלא נכון
+        }
+    }
+
+    /// <summary>
+    /// מוחק את פרטי מטא של הטלפון. נקרא מ-Logout.
+    ///
+    /// מתודה נפרדת ולא <see cref="SetPhoneCloudApiConfigAsync"/>, כי ההיא
+    /// בנויה על Coalesce — null שם פירושו "לא לשנות", והיא לא יכולה למחוק
+    /// מתוך עיצוב. מחיקה היא כוונה אחרת וצריכה מסלול מוצהר.
+    ///
+    /// ברירת המחדל מוחקת את הטוקנים בלבד. <paramref name="wipeAll"/> מוחק גם
+    /// את waba_id ו-phone_number_id — הם לא סודות אלא הזהות אצל מטא, ולהשאיר
+    /// אותם פירושו שהלקוח לא מקליד אותם מחדש בהתחברות הבאה.
+    ///
+    /// מוצב <c>""</c> ולא <c>null</c>: כל הקוראים בודקים
+    /// <c>IsNullOrWhiteSpace</c>, ולכן התוצאה זהה, ואין תלות בשאלה איך
+    /// postgrest מעביר null ב-<c>Set</c>.
+    /// </summary>
+    public async Task ClearPhoneCloudApiConfigAsync(Guid phoneId, bool wipeAll = false)
+    {
+        try
+        {
+            // מחרוזת ריקה ולא null. כל מי שקורא את השדות האלה משתמש
+            // ב-IsNullOrWhiteSpace, ולכן השתיים שקולות לגמרי:
+            //
+            //   DockerService.BuildCloudApiParams   IsNullOrWhiteSpace(PhoneNumberId) → זורק
+            //                                       IsNullOrWhiteSpace(AccessToken)   → זורק
+            //   PhonesController.Coalesce           IsNullOrWhiteSpace(incoming) → הקיים
+            //   PhonesController missing[]          IsNullOrWhiteSpace → "חסר"
+            //   GetCloudApiSpecAsync                IsNullOrWhiteSpace(pnid) → null
+            //
+            // והיא עוקפת את השאלה אם postgrest מעביר null ב-Set. פחות קוד
+            // ופחות דבר אחד לא ידוע.
+            var q = _client.From<Phone>()
+                           .Where(x => x.Id == phoneId)
+                           .Set(x => x.CloudAccessToken!, "")
+                           .Set(x => x.CloudVerifyToken!, "");
+
+            if (wipeAll)
+                q = q.Set(x => x.WabaId!, "")
+                     .Set(x => x.PhoneNumberId!, "");
+
+            await q.Update();
+
+            _logger.LogInformation("[DB] cloudapi config cleared phone={PhoneId} wipeAll={WipeAll}",
+                phoneId, wipeAll);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[DB] ClearPhoneCloudApiConfigAsync failed for {PhoneId}", phoneId);
+            throw;   // Logout צריך לדעת שהטוקן נשאר בטבלה
         }
     }
 
