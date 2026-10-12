@@ -45,23 +45,41 @@ public class PhonesController : ControllerBase
     private static bool IsCloud(string provider) =>
         string.Equals(provider, ProviderCloudApi, StringComparison.OrdinalIgnoreCase);
 
+    // ══════════════════════════════════════════════════════════════════
+    // Logout
+    //   baileys  → מוחקים את ה-session המקומי ומרימים מחדש ל-QR חדש
+    //   cloudapi → אין session. מה שצריך להתבטל הוא ה-override אצל מטא,
+    //              ואת זה עושה הקונטיינר — **לפני** שמוחקים אותו.
+    // ══════════════════════════════════════════════════════════════════
+    // `force` ברירת מחדל **false**, ובכוונה.
+    //
+    // הסרת ה-override אצל מטא היא לא שלב ראשון מבין ארבעה — היא **מה
+    // שההתנתקות הזאת היא**. בלעדיה הטלפון לא יצא מהרישום: מטא ממשיכה
+    // לשלוח ל-whqueue, ומחיקת הקונטיינר רק הופכת את זה לתור בלי צרכן.
+    // זה לא logout, זה טלפון שבור שנראה מנותק.
+    //
+    // לכן הכשל עוצר את הכל, ושום דבר לא משתנה. `?force=true` הוא מילוט
+    // מוצהר למצב שבו הקונטיינר מת או שהטוקן נשלל, ואפשר לכבות אותו לגמרי
+    // בהגדרה AppSettings:CloudApi:AllowForcedLogout.
     [HttpPost("{phoneId}/logout")]
-    public async Task<IActionResult> Logout(Guid phoneId)
+    public async Task<IActionResult> Logout(
+        Guid phoneId,
+        [FromQuery] bool force      = false,
+        [FromQuery] bool wipeConfig = false)
     {
         var phone = await _supabaseService.GetPhoneByIdAsync(phoneId);
         if (phone == null) return NotFound(new { error = "Phone not found" });
+
+        // ── cloudapi מטופל במלואו בנפרד ───────────────────────────────
+        // לא רק בגלל מה שהוא עושה, אלא בגלל ה-**סדר**: המסלול המשותף מחק את
+        // הקונטיינר קודם, ואחרי שהוא נמחק אין דרך נוחה להסיר את ה-override.
+        if (IsCloud(ResolveProvider(phone, null)))
+            return await LogoutCloudApi(phone, force, wipeConfig);
 
         try
         {
             if (!string.IsNullOrEmpty(phone.ContainerId))
                 await _dockerService.RemoveContainerAsync(phone.ContainerId);
-
-            // ── Cloud API: אין session מקומי למחוק. רק מכבים את הקונטיינר. ──
-            if (IsCloud(ResolveProvider(phone, null)))
-            {
-                await _supabaseService.UpdatePhoneDockerStatusAsync(phoneId, PhoneDockerStatus.Stopped);
-                return Ok(new { success = true, message = "Cloud API container stopped", provider = ProviderCloudApi });
-            }
 
             var phoneIndex = phone.Number.Replace("+", "");
             var basePath   = _configuration["AppSettings:Docker:DataBasePath"] ?? "/opt/whatsapp-data";
@@ -82,6 +100,184 @@ public class PhonesController : ControllerBase
             _logger.LogError(ex, "Error during logout for phone {PhoneId}", phoneId);
             return StatusCode(500, new { error = ex.Message });
         }
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // Cloud API logout
+    // ══════════════════════════════════════════════════════════════════
+    //
+    // ארבעה שלבים, והסדר הוא העיקר:
+    //
+    //   1. הקונטיינר מסיר את ה-override אצל מטא
+    //   2. מוחקים את הקונטיינר
+    //   3. מוחקים את הטוקן מה-DB
+    //   4. סטטוסים
+    //
+    // למה 1 לפני 2: אחרי מחיקת הקונטיינר אין דרך נוחה להסיר את ההפניה, ומטא
+    // תמשיך לשלוח ל-whqueue. whqueue יפרסם ל-`wa.in.{pnid}`, לא יהיה צרכן,
+    // וההודעות **לא יאבדו** — הן יצטברו ב-NATS, שהוא מקום משותף לכל
+    // הטלפונים. זה בדיוק הכשל שחיפשנו שלושה ימים, מהצד השני.
+    //
+    // ולמה דרך הקונטיינר ולא ישירות מול Graph: ה-Manager הוא proxy. מי שמדבר
+    // עם מטא הוא הספק. מימוש שני של אותה לוגיקה כאן פירושו שאחד מהשניים
+    // יישאר מאחור בשינוי הבא.
+    private async Task<IActionResult> LogoutCloudApi(Phone phone, bool force, bool wipeConfig)
+    {
+        var (fastApiPort, _) = PortHashCalculator.GetBothPorts(phone.Id, _configuration);
+        var steps = new Dictionary<string, object?>();
+
+        _logger.LogInformation("[LOGOUT-CLOUD] ▶ Start | phoneId={PhoneId} port={Port} force={Force} wipeConfig={Wipe}",
+            phone.Id, fastApiPort, force, wipeConfig);
+
+        // ── 1. ה-override ──────────────────────────────────────────────
+        var cleared = false;
+        try
+        {
+            // DELETE ולא POST: זו השיטה ש-whatsapp-single חושף
+            // (`app.delete('/logout')`), ו-baileys הוא הקנוני. הקונטיינר
+            // של cloudapi מקבל את שתיהן, אבל ה-Manager קורא בחוזה.
+            //
+            // `force` מועבר לקונטיינר כי הוא משנה את מה שנכון לו לעשות: בלעדיו
+            // הוא משאיר את הצרכן חי ואת המפתח ב-Redis כשההסרה נכשלה, כדי לא
+            // להרוס מה שעובד. כשאנחנו בכל מקרה מוחקים אותו, השמירה הזאת רק
+            // משאירה מפתח יתום — ולכן אומרים לו מה הכוונה.
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+            var res  = await http.DeleteAsync(
+                $"http://localhost:{fastApiPort}/logout?force={(force ? "true" : "false")}");
+            var body = await res.Content.ReadAsStringAsync();
+
+            _logger.LogInformation("[LOGOUT-CLOUD] container responded {Status} | phoneId={PhoneId} body={Body}",
+                res.StatusCode, phone.Id, body);
+
+            // ה-200 לא קובע. `ok` בתשובה הוא קריאה חזרה מול Graph — אותו
+            // כלל שלמדנו בהצבה, ונכון גם בהסרה.
+            using var doc = System.Text.Json.JsonDocument.Parse(body);
+            cleared = doc.RootElement.TryGetProperty("ok", out var ok)
+                      && ok.ValueKind == System.Text.Json.JsonValueKind.True;
+
+            steps["override"] = System.Text.Json.JsonSerializer.Deserialize<object>(body);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[LOGOUT-CLOUD] container unreachable | phoneId={PhoneId} port={Port}",
+                phone.Id, fastApiPort);
+            steps["override"] = new { error = "container unreachable", details = ex.Message };
+        }
+
+        // המילוט נחסם ברמת ה-host. ברירת המחדל true שומרת על ההתנהגות
+        // הקיימת; false בייצור אומר שאין דרך לדלג על הצעד הזה בכלל.
+        var forceAllowed = _configuration.GetValue("AppSettings:CloudApi:AllowForcedLogout", true);
+        if (force && !forceAllowed)
+        {
+            _logger.LogWarning("[LOGOUT-CLOUD] force requested but disabled on this host | phoneId={PhoneId}", phone.Id);
+            force = false;
+            steps["force"] = "requested but disabled by AppSettings:CloudApi:AllowForcedLogout";
+        }
+
+        if (!cleared && !force)
+        {
+            _logger.LogWarning("[LOGOUT-CLOUD] ✗ refusing to tear down — override still points at whqueue | phoneId={PhoneId}",
+                phone.Id);
+
+            return StatusCode(502, new
+            {
+                error    = "Meta's webhook override was not removed — the phone was NOT torn down",
+                hint     = "Nothing was changed; retry once the container answers. ?force=true proceeds anyway, "
+                         + "and then Meta keeps delivering to whqueue for a subject with no consumer — those "
+                         + "messages pile up in the shared NATS stream.",
+                phoneId  = phone.Id,
+                provider = ProviderCloudApi,
+                steps,
+            });
+        }
+
+        // ── 2. הקונטיינר ───────────────────────────────────────────────
+        try
+        {
+            if (!string.IsNullOrEmpty(phone.ContainerId))
+            {
+                await _dockerService.RemoveContainerAsync(phone.ContainerId);
+                steps["container"] = "removed";
+            }
+            else
+            {
+                steps["container"] = "no container id on the row";
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[LOGOUT-CLOUD] RemoveContainerAsync failed | phoneId={PhoneId}", phone.Id);
+            steps["container"] = new { error = ex.Message };
+        }
+
+        // ── 3. הטוקן ───────────────────────────────────────────────────
+        // SetPhoneCloudApiConfigAsync לא יכולה למחוק — היא בנויה על Coalesce
+        // כדי ש-provision חוזר בלי טוקן לא ימחק קיים. מחיקה היא כוונה אחרת
+        // ויש לה מסלול משלה.
+        //
+        // **וכאן יש תנאי שנראה כמו חוסר עקביות ואינו כזה.** ההפניה אצל מטא
+        // נמחקת רק על ידי מי שמחזיק טוקן תקף. אם ההסרה נכשלה ואנחנו מוחקים
+        // גם את הקונטיינר וגם את הטוקן, אין יותר **אף אחד** שיכול להסיר
+        // אותה — לא הקונטיינר, שנמחק, ולא ה-Manager, שאין לו טוקן. מטא
+        // תמשיך לשלוח ל-whqueue לנצח, ואי אפשר לעצור אותה מתוך המערכת.
+        //
+        // לכן כשההסרה נכשלה הטוקן **נשאר**: הטלפון יוצא מהרישום כפי שביקשו,
+        // ובמקביל נשמרת הדרך היחידה לתקן. הסרה ידנית מול Graph, ואז logout
+        // חוזר שינקה את מה שנותר.
+        if (cleared)
+        {
+            try
+            {
+                await _supabaseService.ClearPhoneCloudApiConfigAsync(phone.Id, wipeConfig);
+                steps["db"] = wipeConfig ? "tokens + waba/pnid cleared" : "tokens cleared";
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[LOGOUT-CLOUD] clearing cloud config failed | phoneId={PhoneId}", phone.Id);
+                steps["db"] = new { error = ex.Message };
+            }
+        }
+        else
+        {
+            _logger.LogError("[LOGOUT-CLOUD] ⚠ token KEPT on purpose | phoneId={PhoneId} — the override at Meta "
+                           + "was not removed, and the token is the only way left to remove it", phone.Id);
+            steps["db"] = "token KEPT — it is the only remaining way to remove the override at Meta";
+        }
+
+        // ── 4. סטטוסים ─────────────────────────────────────────────────
+        // Stopped ולא Pending: SyncContainersAsync מקים טלפון שהוא Pending או
+        // Unknown. טלפון cloudapi בלי טוקן שיקום שוב ייפול ב-
+        // BuildCloudApiParams ("no Cloud API access token") בכל סבב sync.
+        try
+        {
+            await _supabaseService.UpdatePhoneDockerStatusAsync(phone.Id, PhoneDockerStatus.Stopped);
+            await _supabaseService.SetPhoneStatusAsync(phone.Id, "inactive");
+            steps["status"] = "docker=stopped · status=inactive";
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[LOGOUT-CLOUD] status update failed | phoneId={PhoneId}", phone.Id);
+            steps["status"] = new { error = ex.Message };
+        }
+
+        _logger.LogInformation("[LOGOUT-CLOUD] ✓ Done | phoneId={PhoneId} overrideCleared={Cleared} forced={Forced}",
+            phone.Id, cleared, !cleared && force);
+
+        return Ok(new
+        {
+            success          = true,
+            provider         = ProviderCloudApi,
+            phoneId          = phone.Id,
+            overrideCleared  = cleared,
+            forced           = !cleared && force,
+            message          = cleared
+                ? "Logged out. Meta's override removed, container deleted, token cleared."
+                : "FORCED logout. Meta's override is STILL in place — it will keep delivering to whqueue "
+                + "with no consumer. Remove it manually from the Graph API.",
+            reconnectHint    = "Re-provision with POST /api/phones/provision (userId + cloudAccessToken required).",
+            wabaSubscription = "untouched — message_template_status_update keeps reaching the app webhook",
+            steps,
+        });
     }
 
     [HttpGet]
