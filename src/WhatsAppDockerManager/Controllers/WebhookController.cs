@@ -307,6 +307,22 @@ private async Task HandleAuthenticated(Guid phoneId, Phone phone, ContainerEvent
                     var replyJid = sendToNumber != null ? $"{sendToNumber}@s.whatsapp.net" : payload.Jid;
                     await SendCanaryAckAsync(phone, replyJid, canaryAck);
                 }
+                var canaryCfg = HttpContext.RequestServices.GetRequiredService<IConfiguration>();
+                if (CanaryAutoReply.SaveMessages(canaryCfg))
+                {
+                    // נשמר ל-messages + draft לפרובר, בלי dispatch ל-webhooks:
+                    // הודעת בדיקה לא אמורה להגיע ללקוח או להפעיל תרחיש.
+                    var canaryContact = (sendToNumber != null
+                            ? await ResolveBySendToAsync(phoneId, sendToNumber)
+                            : await _supabaseService.GetContactByNumberAsync(phoneId, contactNumber))
+                        ?? await _supabaseService.CreateDraftContactAsync(
+                            phoneId, contactNumber, contactLid, contactName, userId);
+
+                    await SaveMessage(phoneId, phone, canaryContact, contactNumber, contactLid,
+                                      isIncoming, payload, dispatch: false);
+                    _logger.LogInformation("[CANARY] {Kind} on phone {PhoneId} saved to contact {ContactId} (no dispatch)",
+                        canaryKind, phoneId, canaryContact.Id);
+                }
                 else
                 {
                     _logger.LogInformation("[CANARY] {Kind} on phone {PhoneId} - not saved", canaryKind, phoneId);
@@ -474,7 +490,7 @@ private async Task HandleAuthenticated(Guid phoneId, Phone phone, ContainerEvent
 private async Task SaveMessage(
     Guid phoneId, Phone phone, Contact contact,
     string contactNumber, string? contactLid,
-    bool isIncoming, ContainerEventPayload payload)
+    bool isIncoming, ContainerEventPayload payload, bool dispatch = true)
 {
       _logger.LogWarning("[MSG-SAVE-DATA] Keys={Keys}", 
         payload.Data != null ? string.Join(",", payload.Data.Keys) : "null");
@@ -540,6 +556,7 @@ private async Task SaveMessage(
         sendTo:            payload.SendTo);   
     
         // ── Dispatch ל-webhooks רשומים (background, לא חוסם) ─────────────────
+    if (dispatch)
     _ = Task.Run(async () =>
     {
         await _dispatcher.DispatchAsync(

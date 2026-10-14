@@ -13,21 +13,22 @@ namespace WhatsAppDockerManager.Services;
 /// point: an ACK proves inbound (container → Manager) and outbound
 /// (Manager → container → WhatsApp) both work for that phone.
 ///
-/// Canary traffic never reaches contacts/messages/Spine: the CHECK must not
-/// create a draft contact or start a scenario, and the ACK's fromMe echo
-/// must not either.
+/// Canary traffic is saved to messages (with a draft contact for the prober)
+/// so the exchange is visible, but never dispatched to webhooks: the CHECK
+/// must not reach a customer's endpoint or start a scenario.
 ///
 /// .env — אחד משני השמות, מה שתואם לשאר ה-.env:
 ///   AppSettings__Canary__ProberNumbers=972501234567   (או CANARY_PROBER_NUMBERS=…)  comma-separated
 ///   AppSettings__Canary__AutoReply=false              (או CANARY_AUTO_REPLY=false)  kill switch
+///   AppSettings__Canary__SaveMessages=false           (או CANARY_SAVE_MESSAGES=false) לא לשמור ל-messages
 /// </summary>
-public static partial class CanaryAutoReply
+public static class CanaryAutoReply
 {
-    [GeneratedRegex(@"CHECK[\s\-_]*ID[\s:#\-]+([0-9A-Z]{6,16})\b", RegexOptions.IgnoreCase)]
-    private static partial Regex CheckRegex();
+    private static readonly Regex Check =
+        new(@"CHECK[\s\-_]*ID[\s:#\-]+([0-9A-Z]{6,16})\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
-    [GeneratedRegex(@"^\s*ACK[\s:#\-]+[0-9A-Z]{6,16}\s*$", RegexOptions.IgnoreCase)]
-    private static partial Regex AckRegex();
+    private static readonly Regex Ack =
+        new(@"^\s*ACK[\s:#\-]+[0-9A-Z]{6,16}\s*$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     public enum Kind { None, Check, AckEcho, OtherFromProber }
 
@@ -52,19 +53,28 @@ public static partial class CanaryAutoReply
         if (!isIncoming)
         {
             var text = data != null && data.TryGetValue("text", out var t) ? t?.ToString() : null;
-            return AckRegex().IsMatch(text ?? "") ? Kind.AckEcho : Kind.OtherFromProber;
+            return Ack.IsMatch(text ?? "") ? Kind.AckEcho : Kind.OtherFromProber;
         }
 
         if (string.Equals(Get(cfg, "AppSettings:Canary:AutoReply", "CANARY_AUTO_REPLY"), "false",
                           StringComparison.OrdinalIgnoreCase))
             return Kind.OtherFromProber;
 
-        var m = CheckRegex().Match(blob);
+        var m = Check.Match(blob);
         if (!m.Success) return Kind.OtherFromProber;
 
         ack = $"ACK {m.Groups[1].Value.ToUpperInvariant()}";
         return Kind.Check;
     }
+
+    /// <summary>
+    /// Save CHECK/ACK to messages (and a draft contact for the prober) so the
+    /// exchange is visible in the UI. Never dispatched to webhooks.
+    /// Off: AppSettings__Canary__SaveMessages=false (or CANARY_SAVE_MESSAGES=false).
+    /// </summary>
+    public static bool SaveMessages(IConfiguration cfg) =>
+        !string.Equals(Get(cfg, "AppSettings:Canary:SaveMessages", "CANARY_SAVE_MESSAGES"), "false",
+                       StringComparison.OrdinalIgnoreCase);
 
     public static bool IsProber(IConfiguration cfg, string? number)
     {
