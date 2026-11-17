@@ -54,6 +54,12 @@ public class WebhookDispatcherService : IWebhookDispatcherService
         WebhookRegistrationType.Recording,
     };
 
+    // SMS רק ל-Spine (Trigger → /incoming). Job / Recording לא מכירים kind=sms.
+    private static readonly string[] SmsTypes =
+    {
+        WebhookRegistrationType.Trigger,
+    };
+
     public WebhookDispatcherService(
         ISupabaseService supabase,
         IHttpClientFactory httpFactory,
@@ -83,7 +89,7 @@ public class WebhookDispatcherService : IWebhookDispatcherService
                 WhatsAppMessageId = whatsAppMessageId,
             });
 
-            await PostToAllAsync(payload, "WA");
+            await PostToAllAsync(payload, "WA", Priority);
         }
         catch (Exception ex)
         {
@@ -105,7 +111,7 @@ public class WebhookDispatcherService : IWebhookDispatcherService
                 Sms     = sms,
             });
 
-            await PostToAllAsync(payload, "SMS");
+            await PostToAllAsync(payload, "SMS", SmsTypes);
         }
         catch (Exception ex)
         {
@@ -114,12 +120,12 @@ public class WebhookDispatcherService : IWebhookDispatcherService
     }
 
     // ── משותף: אותם webhooks רשומים, אותו סדר עדיפויות ──────────────────────
-    private async Task PostToAllAsync(string payload, string tag)
+    private async Task PostToAllAsync(string payload, string tag, string[] types)
     {
         var http = _httpFactory.CreateClient();
         http.Timeout = TimeSpan.FromSeconds(5);
 
-        foreach (var eventType in Priority)
+        foreach (var eventType in types)
         {
             var registrations = await _supabase.GetActiveWebhooksByTypeAsync(eventType);
             if (!registrations.Any())
