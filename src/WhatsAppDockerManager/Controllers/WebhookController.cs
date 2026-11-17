@@ -101,7 +101,34 @@ public class WebhookController : ControllerBase
 
         return Ok(new { received = true });
     }
-private static readonly ConcurrentDictionary<string, SemaphoreSlim> 
+
+    // ── SMS מטלפון מושכר (PhoneOrchestrator → כאן → webhooks רשומים, kind=sms) ──
+    // לא נשמר כאן כלום: ה-SMS כבר בטבלת sms (rpc_sms_inbound). התפקיד היחיד
+    // של ה-Manager הוא להפיץ אותו באותו מסלול כמו הודעת WhatsApp.
+    [HttpPost("sms-event/{phoneId}")]
+    public async Task<IActionResult> SmsEvent(Guid phoneId, [FromBody] SmsEventPayload payload)
+    {
+        var cfg      = HttpContext.RequestServices.GetRequiredService<IConfiguration>();
+        var expected = cfg["AppSettings:WebhookSecret"] is { Length: > 0 } ws ? ws : "manager-secret";
+        var given    = Request.Headers["X-Webhook-Secret"].ToString();
+        if (!string.Equals(given, expected, StringComparison.Ordinal))
+        {
+            _logger.LogWarning("[SMS] phone={PhoneId} rejected — bad X-Webhook-Secret", phoneId);
+            return Unauthorized(new { error = "bad secret" });
+        }
+
+        var phone = await _supabaseService.GetPhoneByIdAsync(phoneId);
+        if (phone == null)
+            return NotFound(new { error = "Phone not found" });
+
+        _logger.LogInformation("[SMS] phone={PhoneId} msg={MsgId} from={From} len={Len}",
+            phoneId, payload.MsgId, payload.From, payload.Text?.Length ?? 0);
+
+        _ = Task.Run(() => _dispatcher.DispatchSmsAsync(phoneId, payload));
+        return Ok(new { received = true });
+    }
+
+private static readonly ConcurrentDictionary<string, SemaphoreSlim>
     _numberLocks = new();
     /// <summary>
     /// 
@@ -602,4 +629,15 @@ public class ContainerEventPayload
     [JsonPropertyName("errorMessage")] public string? ErrorMessage { get; set; }
     [JsonPropertyName("ver")]          public string? Ver          { get; set; }
     [JsonPropertyName("sendTo")]       public string? SendTo       { get; set; }
+}
+
+/// <summary>מה ש-PhoneOrchestrator שולח ל-sms-event. raw = גוף ה-hub כמו שהוא.</summary>
+public class SmsEventPayload
+{
+    [JsonPropertyName("msg_id")]      public string? MsgId      { get; set; }
+    [JsonPropertyName("sms_id")]      public string? SmsId      { get; set; }
+    [JsonPropertyName("from")]        public string? From       { get; set; }
+    [JsonPropertyName("text")]        public string? Text       { get; set; }
+    [JsonPropertyName("received_at")] public string? ReceivedAt { get; set; }
+    [JsonPropertyName("raw")]         public System.Text.Json.JsonElement? Raw { get; set; }
 }
