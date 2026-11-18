@@ -45,6 +45,7 @@ public class WebhookDispatcherService : IWebhookDispatcherService
 {
     private readonly ISupabaseService           _supabase;
     private readonly IHttpClientFactory         _httpFactory;
+    private readonly IConfiguration             _cfg;
     private readonly ILogger<WebhookDispatcherService> _logger;
 
     private static readonly string[] Priority =
@@ -63,8 +64,10 @@ public class WebhookDispatcherService : IWebhookDispatcherService
     public WebhookDispatcherService(
         ISupabaseService supabase,
         IHttpClientFactory httpFactory,
+        IConfiguration cfg,
         ILogger<WebhookDispatcherService> logger)
     {
+        _cfg         = cfg;
         _supabase    = supabase;
         _httpFactory = httpFactory;
         _logger      = logger;
@@ -125,6 +128,10 @@ public class WebhookDispatcherService : IWebhookDispatcherService
         var http = _httpFactory.CreateClient();
         http.Timeout = TimeSpan.FromSeconds(5);
 
+        // אותו סוד משותף כמו sms-event (נכנס). backend recording callback בודק אותו;
+        // Spine מתעלם מ-header שהוא לא מכיר.
+        var secret = _cfg["AppSettings:WebhookSecret"] is { Length: > 0 } ws ? ws : "manager-secret";
+
         foreach (var eventType in types)
         {
             var registrations = await _supabase.GetActiveWebhooksByTypeAsync(eventType);
@@ -135,9 +142,13 @@ public class WebhookDispatcherService : IWebhookDispatcherService
             {
                 try
                 {
-                    using var response = await http.PostAsync(
-                        reg.CallbackUrl,
-                        new StringContent(payload, Encoding.UTF8, "application/json"));
+                    using var req = new HttpRequestMessage(HttpMethod.Post, reg.CallbackUrl)
+                    {
+                        Content = new StringContent(payload, Encoding.UTF8, "application/json"),
+                    };
+                    req.Headers.Add("X-Webhook-Secret", secret);
+
+                    using var response = await http.SendAsync(req);
 
                     _logger.LogInformation("[DISPATCH][{Tag}][{Type}] → {Url} status={Status}",
                         tag, eventType.ToUpper(), reg.CallbackUrl, (int)response.StatusCode);
