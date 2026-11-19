@@ -33,6 +33,24 @@ public class SendController : ControllerBase
     private static string ProviderOf(Phone phone) =>
         string.IsNullOrWhiteSpace(phone.Provider) ? ProviderBaileys : phone.Provider.Trim().ToLowerInvariant();
 
+    // ── opt-out ───────────────────────────────────────────────────────────────
+    // Every send to a contact passes here (ForwardToContainer + both PING paths):
+    // UI, Worker/ICR, Spine, Scheduler. A recipient who replied STOP or used the
+    // unsubscribe link gets nothing from any customer. 409 + code OPTED_OUT.
+    // The opt-out confirmation itself is sent by the backend straight to the
+    // container, not through here.
+    private async Task<IActionResult?> BlockIfOptedOutAsync(Guid phoneId, string? jid, string messageType, object logContent)
+    {
+        if (string.IsNullOrWhiteSpace(jid) || !await _supabaseService.IsOptedOutAsync(jid))
+            return null;
+
+        await _senderLogService.LogAsync(phoneId, jid, messageType, logContent,
+            status: "failed", errorMessage: "OPTED_OUT: recipient opted out (STOP / unsubscribe link)");
+        _logger.LogWarning("[SEND] ⛔ {Type} to {Jid} blocked — recipient opted out", messageType, jid);
+
+        return Conflict(new { error = "Recipient opted out", code = "OPTED_OUT" });
+    }
+
     // ── Send ping as template ────────────────────────────────────────────────
     // כמו SendPing, אבל ההודעה מחוללת מתבנית מאושרת במקום טקסט חופשי.
     // ה-ping_sender נוצר בדיוק כמו במסלול הרגיל — הוויזארד תלוי ב-pingSenderId.
@@ -51,6 +69,9 @@ public class SendController : ControllerBase
             return BadRequest(new { error = "Container not running", dockerStatus = phone.DockerStatus });
 
         var targetNumber = request.Jid.Split('@')[0];
+
+        if (await BlockIfOptedOutAsync(phoneId, request.Jid, "ping", new { template = request.Name }) is { } blockedTpl)
+            return blockedTpl;
 
         var pingSender = await _supabaseService.CreatePingSenderAsync(
             phoneId, targetNumber, null, phone.UserId);
@@ -375,6 +396,9 @@ public class SendController : ControllerBase
         string? whatsappMessageId = null;
         var targetNumber = request.Jid.Split('@')[0];
 
+        if (await BlockIfOptedOutAsync(phoneId, request.Jid, "ping", new { text = request.Text }) is { } blockedPing)
+            return blockedPing;
+
         try
         {
             var pingSender = await _supabaseService.CreatePingSenderAsync(
@@ -509,6 +533,9 @@ public class SendController : ControllerBase
         Guid phoneId, string endpoint, object request,
         string jid, string messageType, object logContent)
     {
+        if (await BlockIfOptedOutAsync(phoneId, jid, messageType, logContent) is { } blocked)
+            return blocked;
+
         var phone = await _supabaseService.GetPhoneByIdAsync(phoneId);
         if (phone == null)
             return NotFound(new { error = "Phone not found" });

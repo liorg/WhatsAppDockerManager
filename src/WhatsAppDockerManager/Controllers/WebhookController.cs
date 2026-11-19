@@ -1,4 +1,5 @@
 using System.Net.Http.Json;
+using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Mvc;
 using System.Collections.Concurrent;
 using System.Text.Json.Serialization;
@@ -27,6 +28,37 @@ public class WebhookController : ControllerBase
 
     private static bool IsValidLid(string? lid) =>
         !string.IsNullOrWhiteSpace(lid) && !_bogusLidValues.Contains(lid);
+
+    // ── opt-out: exact replies only (same list as backend routers/optout.py) ──
+    private static readonly HashSet<string> _stopWords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "stop", "stopall", "unsubscribe", "cancel", "end", "quit", "optout", "opt out",
+        "עצור", "הסר", "הסרה", "הפסק", "די",
+        "стоп", "отписаться", "отписка",
+        "توقف", "ايقاف", "إيقاف", "الغاء", "إلغاء",
+        "arret", "arrêt", "alto", "baja", "parar", "basta", "stopp",
+    };
+
+    private static bool IsStopText(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return false;
+        var s = text.Normalize(System.Text.NormalizationForm.FormKC).Trim();
+        s = Regex.Replace(s, @"^[\W_]+|[\W_]+$", "");
+        return _stopWords.Contains(s.ToLowerInvariant());
+    }
+
+    private static string? DataText(Dictionary<string, object>? data)
+    {
+        if (data == null) return null;
+        foreach (var key in new[] { "text", "displayText", "caption" })
+            if (data.TryGetValue(key, out var v) && v != null)
+            {
+                var str = v is System.Text.Json.JsonElement je && je.ValueKind == System.Text.Json.JsonValueKind.String
+                    ? je.GetString() : v.ToString();
+                if (!string.IsNullOrWhiteSpace(str)) return str;
+            }
+        return null;
+    }
 
     public WebhookController(
         IContainerManager containerManager,
@@ -448,7 +480,23 @@ private async Task HandleAuthenticated(Guid phoneId, Phone phone, ContainerEvent
             }
 
             _logger.LogInformation("[MSG] Draft contact {Id} waiting for user selection in wizard", contact.Id);
-            await SaveMessage(phoneId, phone, contact, contactNumber, contactLid, isIncoming, payload);
+
+            // ── opt-out ───────────────────────────────────────────
+            // unwanted = asked to stop → kept in the chat history, but never reaches
+            // scenarios / triggers. A STOP reply goes to the backend first; if it opted
+            // the number out, it is not dispatched either.
+            var incomingText = DataText(payload.Data);
+            var dispatch     = !string.Equals(contact.Tag, "unwanted", StringComparison.OrdinalIgnoreCase);
+            if (dispatch && IsStopText(incomingText))
+            {
+                var optedOut = await NotifyOptoutStopAsync(
+                    phoneId, sendToNumber ?? contactNumber, contactLid, incomingText!, payload.MessageId, contact.Id);
+                if (optedOut) dispatch = false;
+            }
+            if (!dispatch)
+                _logger.LogInformation("[OPTOUT] contact {Id} is unwanted — message saved, not dispatched", contact.Id);
+
+            await SaveMessage(phoneId, phone, contact, contactNumber, contactLid, isIncoming, payload, dispatch);
         }
         catch (Exception ex)
         {
@@ -456,6 +504,55 @@ private async Task HandleAuthenticated(Guid phoneId, Phone phone, ContainerEvent
         }
     }
   
+    /// <summary>
+    /// STOP reply → backend /optout/stop. The backend decides whether it counts
+    /// (PING to this number inside the window), blocks the number platform-wide,
+    /// tags every contact 'unwanted' and sends the confirmation with the reference number.
+    /// Returns true when the number is now opted out. Never throws: on any failure the
+    /// message is handled as a normal message (the unsubscribe link still works).
+    /// </summary>
+    private async Task<bool> NotifyOptoutStopAsync(
+        Guid phoneId, string number, string? lid, string text, string? messageId, Guid contactId)
+    {
+        var cfg    = HttpContext.RequestServices.GetRequiredService<IConfiguration>();
+        var url    = cfg["AppSettings:OptoutStopUrl"] is { Length: > 0 } u ? u : "https://backend.grossman.bot/api/optout/stop";
+        var secret = cfg["AppSettings:WebhookSecret"] is { Length: > 0 } ws ? ws : "manager-secret";
+        try
+        {
+            var client = HttpContext.RequestServices.GetRequiredService<IHttpClientFactory>().CreateClient();
+            client.Timeout = TimeSpan.FromSeconds(8);
+            using var req = new HttpRequestMessage(HttpMethod.Post, url)
+            {
+                Content = JsonContent.Create(new
+                {
+                    phone_id   = phoneId.ToString(),
+                    sender     = number,
+                    lid,
+                    text,
+                    message_id = messageId,
+                    contact_id = contactId.ToString(),
+                }),
+            };
+            req.Headers.Add("X-Webhook-Secret", secret);
+            using var res  = await client.SendAsync(req);
+            var body       = await res.Content.ReadAsStringAsync();
+            if (!res.IsSuccessStatusCode)
+            {
+                _logger.LogWarning("[OPTOUT] STOP from {Number} → backend {Status}: {Body}", number, (int)res.StatusCode, body);
+                return false;
+            }
+            using var doc = System.Text.Json.JsonDocument.Parse(body);
+            var opted = doc.RootElement.TryGetProperty("opted_out", out var o) && o.GetBoolean();
+            _logger.LogInformation("[OPTOUT] STOP from {Number} on {PhoneId} → opted_out={Opted} {Body}", number, phoneId, opted, body);
+            return opted;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[OPTOUT] STOP from {Number} — backend call failed", number);
+            return false;
+        }
+    }
+
     /// <summary>
     /// ACK מהטלפון הנבדק עצמו, דרך הקונטיינר שלו — אותו מסלול כמו SendPing.
     /// לא נרשם ל-sender_log: זו תעבורת בדיקה, לא הודעה של הלקוח.
