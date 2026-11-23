@@ -32,6 +32,14 @@ public class WebhookSmsDispatchPayload
     [JsonPropertyName("sms")]     public SmsEventPayload Sms { get; set; } = new();
 }
 
+/// <summary>מייל: כמו SMS — רק טלפון. ה-Worker מחליט איזה סשן ב-wait_mail צורך אותו.</summary>
+public class WebhookMailDispatchPayload
+{
+    [JsonPropertyName("kind")]    public string Kind    { get; set; } = "mail";
+    [JsonPropertyName("phoneId")] public string PhoneId { get; set; } = "";
+    [JsonPropertyName("mail")]    public MailEventPayload Mail { get; set; } = new();
+}
+
 public interface IWebhookDispatcherService
 {
     Task DispatchAsync(Guid phoneId, Guid contactId, Guid messageId,
@@ -39,6 +47,8 @@ public interface IWebhookDispatcherService
                        bool direction);
 
     Task DispatchSmsAsync(Guid phoneId, SmsEventPayload sms);
+
+    Task DispatchMailAsync(Guid phoneId, MailEventPayload mail);
 }
 
 public class WebhookDispatcherService : IWebhookDispatcherService
@@ -119,6 +129,28 @@ public class WebhookDispatcherService : IWebhookDispatcherService
         catch (Exception ex)
         {
             _logger.LogError(ex, "[DISPATCH][SMS] Error for phone={PhoneId}", phoneId);
+        }
+    }
+
+    // מייל — כמו SMS: Trigger בלבד (Spine /incoming)
+    public async Task DispatchMailAsync(Guid phoneId, MailEventPayload mail)
+    {
+        try
+        {
+            _logger.LogInformation("[DISPATCH][MAIL] phone={PhoneId} msg={MsgId} from={From}",
+                phoneId, mail.MsgId, mail.From);
+
+            var payload = JsonSerializer.Serialize(new WebhookMailDispatchPayload
+            {
+                PhoneId = phoneId.ToString(),
+                Mail    = mail,
+            });
+
+            await PostToAllAsync(payload, "MAIL", SmsTypes);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[DISPATCH][MAIL] Error for phone={PhoneId}", phoneId);
         }
     }
 

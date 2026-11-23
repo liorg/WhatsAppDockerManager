@@ -160,6 +160,31 @@ public class WebhookController : ControllerBase
         return Ok(new { received = true });
     }
 
+    // ── מייל נכנס (whqueue mail-relay → כאן → webhooks רשומים, kind=mail) ──
+    // כמו sms-event: לא נשמר כאן כלום — המייל כבר ב-mail_inbound (rpc_mail_inbound).
+    [HttpPost("mail-event/{phoneId}")]
+    public async Task<IActionResult> MailEvent(Guid phoneId, [FromBody] MailEventPayload payload)
+    {
+        var cfg      = HttpContext.RequestServices.GetRequiredService<IConfiguration>();
+        var expected = cfg["AppSettings:WebhookSecret"] is { Length: > 0 } ws ? ws : "manager-secret";
+        var given    = Request.Headers["X-Webhook-Secret"].ToString();
+        if (!string.Equals(given, expected, StringComparison.Ordinal))
+        {
+            _logger.LogWarning("[MAIL] phone={PhoneId} rejected — bad X-Webhook-Secret", phoneId);
+            return Unauthorized(new { error = "bad secret" });
+        }
+
+        var phone = await _supabaseService.GetPhoneByIdAsync(phoneId);
+        if (phone == null)
+            return NotFound(new { error = "Phone not found" });
+
+        _logger.LogInformation("[MAIL] phone={PhoneId} msg={MsgId} from={From} subject_len={Sub} len={Len}",
+            phoneId, payload.MsgId, payload.From, payload.Subject?.Length ?? 0, payload.Text?.Length ?? 0);
+
+        _ = Task.Run(() => _dispatcher.DispatchMailAsync(phoneId, payload));
+        return Ok(new { received = true });
+    }
+
 private static readonly ConcurrentDictionary<string, SemaphoreSlim>
     _numberLocks = new();
     /// <summary>
@@ -737,4 +762,17 @@ public class SmsEventPayload
     [JsonPropertyName("text")]        public string? Text       { get; set; }
     [JsonPropertyName("received_at")] public string? ReceivedAt { get; set; }
     [JsonPropertyName("raw")]         public System.Text.Json.JsonElement? Raw { get; set; }
+}
+
+/// <summary>מה ש-whqueue (mail-relay) שולח ל-mail-event. ה-html לא עובר — רק ב-DB.</summary>
+public class MailEventPayload
+{
+    [JsonPropertyName("msg_id")]      public string? MsgId      { get; set; }
+    [JsonPropertyName("mail_id")]     public string? MailId     { get; set; }
+    [JsonPropertyName("from")]        public string? From       { get; set; }
+    [JsonPropertyName("from_name")]   public string? FromName   { get; set; }
+    [JsonPropertyName("to")]          public string? To         { get; set; }
+    [JsonPropertyName("subject")]     public string? Subject    { get; set; }
+    [JsonPropertyName("text")]        public string? Text       { get; set; }
+    [JsonPropertyName("received_at")] public string? ReceivedAt { get; set; }
 }
